@@ -7,63 +7,83 @@ import pandas as pd
 import numpy as np
 
 
-def load_fund_data(file_path):
+def load_fund_data(file_path: str, series: str = 'F') -> pd.DataFrame:
     """
-    Load raw fund data from CSV.
+    Load and preprocess fund data.
 
     Parameters:
-      file_path: Path to data.csv
+      file_path: Path to the CSV file
+      series: Fund series to filter (default 'F')
 
     Returns:
-      DataFrame with fund data
+      Preprocessed DataFrame
     """
-    print(f"Loading fund data from {file_path}...")
-
-    df = pd.read_csv(file_path)
+    # Load with low_memory=False to handle mixed types
+    df = pd.read_csv(file_path, low_memory=False)
     df['Date'] = pd.to_datetime(df['Date'])
-    df = df.sort_values(by=['Fund', 'Date']).reset_index(drop=True)
 
-    # Rename column if needed
-    if 'Remaining Cap (%)' in df.columns:
-        df.rename(columns={'Remaining Cap (%)': 'Remaining Cap'}, inplace=True)
+    df = df.rename(columns={
+        'Remaining Cap (%)': 'Remaining Cap',
+        'Remaining Cap Net (%)': 'Remaining Cap Net',
+        'Remaining Buffer (%)': 'Remaining Buffer',
+        'Remaining Buffer Net (%)': 'Remaining Buffer Net',
+        # Add any other columns you want to rename
+    })
 
-    # Compute daily returns if not present
-    if 'daily_return' not in df.columns:
-        df['daily_return'] = df.groupby('Fund')['Fund Value (USD)'].pct_change().fillna(0)
+    # Convert numeric columns that might have been read as strings
+    numeric_cols = [
+        'Fund Value (USD)', 'Fund Return (%)',
+        'Reference Asset Value (USD)', 'Reference Asset Return (%)',
+        'Remaining Outcome Days', 'Remaining Cap',  # Note: Updated name
+        'Remaining Cap Net', 'Reference Asset Return to Realize Cap (%)',
+        'Remaining Buffer', 'Remaining Buffer Net',  # Note: Updated names
+        'Downside Before Buffer (%)', 'Downside Before Buffer Net (%)',
+        'Reference Asset to Buffer End (%)', 'Unrealized Option Payoff (%)',
+        'Unrealized Option Payoff Net (%)'
+    ]
 
-    print(f"  Loaded {len(df)} rows for {df['Fund'].nunique()} funds")
-    print(f"  Date range: {df['Date'].min().date()} to {df['Date'].max().date()}")
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # Filter to only specified series
+    if series:
+        original_count = df['Fund'].nunique()
+        df = df[df['Fund'].str.startswith(series)].copy()
+        filtered_count = df['Fund'].nunique()
+        print(f"  Filtered: {original_count} total funds → {filtered_count} {series}-series funds")
+
+    df = df.sort_values(['Fund', 'Date'])
+
+    # Fix FutureWarning by adding fill_method=None
+    df['daily_return'] = df.groupby('Fund')['Fund Value (USD)'].pct_change(fill_method=None).fillna(0)
 
     return df
 
 
-def load_benchmark_data(file_path):
+def load_benchmark_data(file_path: str) -> pd.DataFrame:
     """
-    Load benchmark time series (SPY, BUFR).
+    Load and preprocess benchmark time series data.
 
     Parameters:
-      file_path: Path to benchmark_ts.csv
+      file_path: Path to the CSV file
 
     Returns:
-      DataFrame with Date, SPY, BUFR columns
+      Preprocessed DataFrame
     """
-    print(f"Loading benchmark data from {file_path}...")
-
-    df = pd.read_csv(file_path)
+    df = pd.read_csv(file_path, low_memory=False)
     df['Date'] = pd.to_datetime(df['Date'])
-    df = df.sort_values('Date').reset_index(drop=True)
+    df = df.sort_values('Date')
 
-    # Calculate daily returns
-    df['spy_return'] = df['SPY'].pct_change().fillna(0)
-    df['bufr_return'] = df['BUFR'].pct_change().fillna(0)
-
-    print(f"  Loaded {len(df)} rows")
-    print(f"  Date range: {df['Date'].min().date()} to {df['Date'].max().date()}")
+    # Calculate daily returns for each benchmark with fill_method=None
+    for col in ['SPY', 'BUFR']:
+        if col in df.columns:
+            df[f'{col}_daily_return'] = df[col].pct_change(fill_method=None).fillna(0)
 
     return df
 
 
-def load_roll_dates(file_path):
+def load_roll_dates(file_path: str) -> dict[str, list]:
     """
     Load roll dates for different rebalancing frequencies.
 
@@ -72,23 +92,20 @@ def load_roll_dates(file_path):
 
     Returns:
       Dict with keys: 'monthly', 'quarterly', 'semi_annual', 'annual'
-      Values are lists of datetime objects
+      Values are sorted lists of datetime objects
     """
-    print(f"Loading roll dates from {file_path}...")
-
-    df = pd.read_csv(file_path)
-
+    df = pd.read_csv(file_path, low_memory=False)
     roll_dates_dict = {}
+
     for col in ['monthly', 'quarterly', 'semi_annual', 'annual']:
         if col in df.columns:
-            dates = pd.to_datetime(df[col].dropna())
+            dates = pd.to_datetime(df[col].dropna()).sort_values()
             roll_dates_dict[col] = dates.tolist()
-            print(f"  Loaded {len(dates)} {col} dates")
 
     return roll_dates_dict
 
 
-def validate_data_alignment(df_fund, df_benchmark):
+def validate_data_alignment(df_fund: pd.DataFrame, df_benchmark: pd.DataFrame) -> tuple[bool, list[str], pd.Timestamp, pd.Timestamp]:
     """
     Validate that fund and benchmark data have overlapping date ranges.
 
@@ -97,8 +114,10 @@ def validate_data_alignment(df_fund, df_benchmark):
       df_benchmark: Benchmark DataFrame
 
     Returns:
-      Tuple of (common_start_date, common_end_date)
+      Tuple of (is_valid, error_messages, common_start_date, common_end_date)
     """
+    errors = []
+
     fund_start = df_fund['Date'].min()
     fund_end = df_fund['Date'].max()
     bench_start = df_benchmark['Date'].min()
@@ -108,10 +127,10 @@ def validate_data_alignment(df_fund, df_benchmark):
     common_end = min(fund_end, bench_end)
 
     if common_start > common_end:
-        raise ValueError("No overlapping dates between fund and benchmark data!")
+        errors.append(
+            f"No overlapping dates! Fund: {fund_start.date()} to {fund_end.date()}, "
+            f"Benchmark: {bench_start.date()} to {bench_end.date()}"
+        )
+        return False, errors, None, None
 
-    print(f"\nData alignment:")
-    print(f"  Common date range: {common_start.date()} to {common_end.date()}")
-    print(f"  Total days: {(common_end - common_start).days}")
-
-    return common_start, common_end
+    return True, errors, common_start, common_end

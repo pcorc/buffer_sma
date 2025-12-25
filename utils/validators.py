@@ -6,17 +6,20 @@ import pandas as pd
 import numpy as np
 
 
-def validate_fund_data(df):
+def validate_fund_data(df: pd.DataFrame, series: str = 'F') -> tuple[bool, list[str], pd.DataFrame]:
     """
-    Validate fund data structure and content.
+    Validate fund data structure and content, automatically cleaning duplicates.
 
     Parameters:
       df: Fund DataFrame
+      series: Expected fund series prefix (default 'F')
 
     Returns:
-      Tuple of (is_valid, error_messages)
+      Tuple of (is_valid, error_messages, cleaned_df)
     """
     errors = []
+    warnings = []
+    cleaned_df = df.copy()
 
     # Check required columns
     required_cols = [
@@ -25,79 +28,133 @@ def validate_fund_data(df):
         'Downside Before Buffer (%)'
     ]
 
-    missing_cols = [col for col in required_cols if col not in df.columns]
+    missing_cols = [col for col in required_cols if col not in cleaned_df.columns]
     if missing_cols:
         errors.append(f"Missing required columns: {missing_cols}")
 
     # Check for null values in critical columns
-    if 'Date' in df.columns:
-        if df['Date'].isna().any():
+    if 'Date' in cleaned_df.columns:
+        if cleaned_df['Date'].isna().any():
             errors.append("Found null values in Date column")
 
-    if 'Fund' in df.columns:
-        if df['Fund'].isna().any():
+    if 'Fund' in cleaned_df.columns:
+        if cleaned_df['Fund'].isna().any():
             errors.append("Found null values in Fund column")
 
     # Check date format
-    if 'Date' in df.columns:
+    if 'Date' in cleaned_df.columns:
         try:
-            pd.to_datetime(df['Date'])
-        except:
-            errors.append("Date column cannot be converted to datetime")
+            cleaned_df['Date'] = pd.to_datetime(cleaned_df['Date'])
+        except Exception as e:
+            errors.append(f"Date column cannot be converted to datetime: {str(e)}")
 
-    # Check for duplicate rows
-    if not df.empty:
-        duplicates = df.duplicated(subset=['Date', 'Fund'], keep=False)
+    # Check for and automatically clean duplicate rows
+    if not cleaned_df.empty:
+        duplicates = cleaned_df.duplicated(subset=['Date', 'Fund'], keep=False)
         if duplicates.any():
-            num_dupes = duplicates.sum()
-            errors.append(f"Found {num_dupes} duplicate Date-Fund combinations")
+            # Find duplicate groups
+            dupe_groups = cleaned_df[duplicates].groupby(['Date', 'Fund']).size().reset_index(name='Count')
+            num_dupe_groups = len(dupe_groups)
 
-    # Check fund naming convention
-    if 'Fund' in df.columns:
-        valid_series = ['F', 'G', 'D']
-        invalid_funds = df[~df['Fund'].str[0].isin(valid_series)]['Fund'].unique()
+            print(f"\n🧹 Cleaning {num_dupe_groups} duplicate Date-Fund combinations:")
+
+            for _, row in dupe_groups.iterrows():
+                date = row['Date']
+                fund = row['Fund']
+                count = row['Count']
+
+                # Get the duplicate rows for this Date-Fund combo
+                mask = (cleaned_df['Date'] == date) & (cleaned_df['Fund'] == fund)
+                dupe_rows = cleaned_df[mask]
+
+                # Show what we found
+                print(f"  • {pd.to_datetime(date).strftime('%Y-%m-%d')} | {fund} | {count} occurrences")
+
+                # Determine which row to keep
+                if 'Fund Return (%)' in dupe_rows.columns:
+                    non_zero = dupe_rows[dupe_rows['Fund Return (%)'] != 0]
+                    if len(non_zero) > 0:
+                        keep_idx = non_zero.index[0]
+                    else:
+                        keep_idx = dupe_rows.index[-1]
+                else:
+                    keep_idx = dupe_rows.index[-1]
+
+                # Drop all except the one we want to keep
+                drop_indices = dupe_rows.index[dupe_rows.index != keep_idx]
+                cleaned_df = cleaned_df.drop(drop_indices)
+
+            warnings.append(f"Automatically cleaned {num_dupe_groups} duplicate Date-Fund combinations")
+
+    # Check fund naming convention (but only warn, don't error)
+    if 'Fund' in cleaned_df.columns:
+        invalid_funds = cleaned_df[~cleaned_df['Fund'].str.startswith(series)]['Fund'].unique()
         if len(invalid_funds) > 0:
-            errors.append(f"Found funds with invalid series: {invalid_funds[:5]}")
+            print(f"\n⚠️  Found {len(invalid_funds)} funds not in {series}-series:")
+            for fund in invalid_funds:
+                count = len(cleaned_df[cleaned_df['Fund'] == fund])
+                print(f"  • {fund} ({count} observations)")
+            warnings.append(f"Found funds with invalid series: {invalid_funds.tolist()}")
+            print()
 
     is_valid = len(errors) == 0
 
-    return is_valid, errors
+    # Print summary
+    if errors:
+        print("❌ VALIDATION FAILED - Critical errors found:")
+        for i, error in enumerate(errors, 1):
+            print(f"  {i}. {error}")
+    elif warnings:
+        print("⚠️  VALIDATION WARNING - Issues found but cleaned:")
+        for i, warning in enumerate(warnings, 1):
+            print(f"  {i}. {warning}")
+    else:
+        print("✅ VALIDATION PASSED - No issues found")
 
+    return is_valid, errors + warnings, cleaned_df
 
-def validate_benchmark_data(df):
+def validate_benchmark_data(df: pd.DataFrame) -> tuple[bool, list[str], pd.DataFrame]:
     """
-    Validate benchmark data structure and content.
+    Validate and clean benchmark data.
 
     Parameters:
       df: Benchmark DataFrame
 
     Returns:
-      Tuple of (is_valid, error_messages)
+      Tuple of (is_valid, error_messages, cleaned_df)
     """
     errors = []
+    cleaned_df = df.copy()
 
     # Check required columns
     required_cols = ['Date', 'SPY', 'BUFR']
-    missing_cols = [col for col in required_cols if col not in df.columns]
+    missing_cols = [col for col in required_cols if col not in cleaned_df.columns]
     if missing_cols:
         errors.append(f"Missing required columns: {missing_cols}")
+        return False, errors, cleaned_df
 
-    # Check for null values
-    for col in ['Date', 'SPY', 'BUFR']:
-        if col in df.columns:
-            if df[col].isna().any():
-                errors.append(f"Found null values in {col} column")
+    # Convert date
+    try:
+        cleaned_df['Date'] = pd.to_datetime(cleaned_df['Date'])
+    except Exception as e:
+        errors.append(f"Date conversion failed: {str(e)}")
+        return False, errors, cleaned_df
 
-    # Check date format
-    if 'Date' in df.columns:
-        try:
-            pd.to_datetime(df['Date'])
-        except:
-            errors.append("Date column cannot be converted to datetime")
+    # Drop leading NaN rows for benchmark columns
+    for col in ['SPY', 'BUFR']:
+        if col in cleaned_df.columns:
+            # Find first non-NaN index
+            first_valid = cleaned_df[col].first_valid_index()
+            if first_valid is not None:
+                cleaned_df = cleaned_df.loc[first_valid:].reset_index(drop=True)
+
+    # Check if we have any data left after cleaning
+    if cleaned_df.empty:
+        errors.append("No valid benchmark data after removing leading NaN values")
+        return False, errors, cleaned_df
 
     is_valid = len(errors) == 0
-
-    return is_valid, errors
+    return is_valid, errors, cleaned_df
 
 
 def validate_roll_dates(roll_dates_dict):
@@ -191,5 +248,3 @@ def print_validation_results(validation_name, is_valid, errors):
         print("❌ FAILED - Issues found:")
         for i, error in enumerate(errors, 1):
             print(f"  {i}. {error}")
-
-    print(f"{'=' * 80}\n")

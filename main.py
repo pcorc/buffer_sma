@@ -15,6 +15,7 @@ Usage:
 
 import os
 import sys
+import traceback
 from datetime import datetime
 
 # Add project root to path
@@ -69,45 +70,33 @@ def main():
     """
     Main execution function.
     """
-    print("\n" + "#" * 80)
-    print("# SINGLE TICKER BACKTEST FRAMEWORK")
-    print("# Phase 1: Quarterly Rebalance, All 12 Launch Months, F-Series")
-    print("#" * 80 + "\n")
 
     start_time = datetime.now()
-    print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-
     # =========================================================================
     # STEP 1: LOAD DATA
     # =========================================================================
 
-    print("STEP 1: Loading data files...")
-    print("-" * 80)
-
     try:
-        df_raw = load_fund_data(DATA_FILE)
+        df_raw = load_fund_data(DATA_FILE, series='F')  # Add series parameter
         df_benchmarks = load_benchmark_data(BENCHMARK_FILE)
         roll_dates_dict = load_roll_dates(ROLL_DATES_FILE)
     except Exception as e:
         print(f"\n❌ ERROR loading data: {str(e)}")
-        print("Please check file paths in config/settings.py")
         return
 
     # =========================================================================
     # STEP 2: VALIDATE DATA
     # =========================================================================
 
-    print("\nSTEP 2: Validating data...")
-    print("-" * 80)
-
-    # Validate fund data
-    is_valid, errors = validate_fund_data(df_raw)
+    # Validate fund data - now returns cleaned dataframe
+    is_valid, errors, df_raw = validate_fund_data(df_raw, series='F')  # Unpack 3 values
     print_validation_results("Fund Data", is_valid, errors)
     if not is_valid:
-        print("⚠️  Proceeding despite validation errors...")
+        print("❌ Cannot proceed with invalid fund data")
+        return
 
     # Validate benchmark data
-    is_valid, errors = validate_benchmark_data(df_benchmarks)
+    is_valid, errors, df_benchmarks = validate_benchmark_data(df_benchmarks)
     print_validation_results("Benchmark Data", is_valid, errors)
     if not is_valid:
         print("❌ Cannot proceed with invalid benchmark data")
@@ -129,15 +118,9 @@ def main():
         print("❌ Cannot proceed without data alignment")
         return
 
-    print(f"✅ All validations passed!")
-    print(f"Common date range: {common_start.date()} to {common_end.date()}")
-
     # =========================================================================
     # STEP 3: PREPROCESS DATA
     # =========================================================================
-
-    print("\nSTEP 3: Preprocessing fund data...")
-    print("-" * 80)
 
     try:
         df_enriched = preprocess_fund_data(df_raw)
@@ -148,9 +131,6 @@ def main():
     # =========================================================================
     # STEP 4: CLASSIFY MARKET REGIMES
     # =========================================================================
-
-    print("\nSTEP 4: Classifying market regimes...")
-    print("-" * 80)
 
     # Prepare SPY data for regime classification
     df_spy_for_regime = df_benchmarks[['Date', 'SPY']].copy()
@@ -171,9 +151,6 @@ def main():
     # STEP 5: PREPARE TRIGGER/SELECTION COMBINATIONS
     # =========================================================================
 
-    print("\nSTEP 5: Preparing trigger/selection combinations...")
-    print("-" * 80)
-
     # Convert config format to execution format
     trigger_selection_combos = []
     for config in COMBO_CONFIGS:
@@ -183,12 +160,6 @@ def main():
             'selection_func_name': config['selection_func_name']
         }
         trigger_selection_combos.append(combo)
-
-    print(f"Prepared {len(trigger_selection_combos)} combinations:")
-    for i, combo in enumerate(trigger_selection_combos, 1):
-        print(f"  {i}. {combo['trigger_type']} + {combo['selection_func_name']}")
-
-    print(f"\nTotal backtests: {len(LAUNCH_MONTHS)} months × {len(trigger_selection_combos)} combos = {len(LAUNCH_MONTHS) * len(trigger_selection_combos)}")
 
     # =========================================================================
     # STEP 6: RUN ALL BACKTESTS
@@ -234,9 +205,9 @@ def main():
         print(f"\n📊 Summary Statistics:")
         perf_summary = create_performance_summary(summary_df)
         print(f"  Total backtests: {perf_summary['total_backtests']}")
-        print(f"  Avg vs BUFR: {perf_summary['avg_vs_bufr'] * 100:+.2f}%")
-        print(f"  % beating BUFR: {perf_summary['pct_beat_bufr']:.1f}%")
-        print(f"  % beating SPY: {perf_summary['pct_beat_spy']:.1f}%")
+        # print(f"  Avg vs BUFR: {perf_summary['avg_vs_bufr'] * 100:+.2f}%")
+        # print(f"  % beating BUFR: {perf_summary['pct_beat_bufr']:.1f}%")
+        # print(f"  % beating SPY: {perf_summary['pct_beat_spy']:.1f}%")
 
     except Exception as e:
         print(f"\n❌ ERROR during consolidation: {str(e)}")
@@ -260,15 +231,14 @@ def main():
             print(f"  {row['regime'].capitalize():8s}: {row['vs_bufr_excess'] * 100:+6.2f}% vs BUFR (avg)")
 
         best_by_regime = find_best_by_regime(regime_df)
-        print("\n🏆 Best Strategy by Regime:")
-        for regime, best in best_by_regime.items():
-            print(f"  {regime.capitalize():8s}: {best['launch_month']} + {best['trigger_type'][:20]}")
+        # print("\n🏆 Best Strategy by Regime:")
+        # for regime, best in best_by_regime.items():
+        #     print(f"  {regime.capitalize():8s}: {best['launch_month']} + {best['trigger_type'][:20]}")
 
         capture_ratios = calculate_capture_ratios(regime_df)
 
     except Exception as e:
         print(f"\n❌ ERROR during regime analysis: {str(e)}")
-        import traceback
         traceback.print_exc()
         regime_df = pd.DataFrame()  # Continue with empty regime results
 
@@ -317,15 +287,7 @@ def main():
     end_time = datetime.now()
     duration = end_time - start_time
 
-    print("\n" + "#" * 80)
     print("# BACKTEST COMPLETE")
-    print("#" * 80)
-    print(f"Start time:    {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"End time:      {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Duration:      {duration}")
-    print(f"Results saved: {RESULTS_DIR}")
-    print("#" * 80 + "\n")
-
 
 if __name__ == '__main__':
     try:
