@@ -78,6 +78,7 @@ def load_benchmark_data(file_path: str) -> pd.DataFrame:
     # Calculate daily returns for each benchmark with fill_method=None
     for col in ['SPY', 'BUFR']:
         if col in df.columns:
+            df[f'{col.lower()}_return'] = df[col].pct_change(fill_method=None).fillna(0)
             df[f'{col}_daily_return'] = df[col].pct_change(fill_method=None).fillna(0)
 
     return df
@@ -91,15 +92,26 @@ def load_roll_dates(file_path: str) -> dict[str, list]:
       file_path: Path to roll_dates.csv
 
     Returns:
-      Dict with keys: 'monthly', 'quarterly', 'semi_annual', 'annual'
+      Dict with keys: 'M', 'Q', 'S', 'A', plus legacy keys
       Values are sorted lists of datetime objects
     """
     df = pd.read_csv(file_path, low_memory=False)
     roll_dates_dict = {}
 
-    for col in ['monthly', 'quarterly', 'semi_annual', 'annual']:
-        if col in df.columns:
+    # Map column names to frequency codes
+    column_mapping = {
+        'monthly': 'M',
+        'quarterly': 'Q',
+        'semi_annual': 'S',
+        'annual': 'A'
+    }
+
+    for col in df.columns:
+        if col in column_mapping:
             dates = pd.to_datetime(df[col].dropna()).sort_values()
+            freq_code = column_mapping[col]
+            roll_dates_dict[freq_code] = dates.tolist()
+            # Also keep legacy key for backwards compatibility
             roll_dates_dict[col] = dates.tolist()
 
     return roll_dates_dict

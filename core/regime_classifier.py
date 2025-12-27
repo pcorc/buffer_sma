@@ -63,15 +63,15 @@ def classify_market_regimes(df_spy, window_months=6, bull_threshold=0.10, bear_t
         pct = (count / total_days) * 100
         print(f"  {regime.capitalize():8s}: {count:5d} days ({pct:5.1f}%)")
 
-    # Calculate average returns by regime
-    print(f"\nAverage Rolling Returns by Regime:")
-    for regime in ['bull', 'bear', 'neutral']:
-        regime_data = df[df['Regime'] == regime]
-        if len(regime_data) > 0:
-            avg_return = regime_data['Rolling_Return'].mean()
-            print(f"  {regime.capitalize():8s}: {avg_return * 100:+6.2f}%")
-
-    print("=" * 80 + "\n")
+    # # Calculate average returns by regime
+    # print(f"\nAverage Rolling Returns by Regime:")
+    # for regime in ['bull', 'bear', 'neutral']:
+    #     regime_data = df[df['Regime'] == regime]
+    #     if len(regime_data) > 0:
+    #         avg_return = regime_data['Rolling_Return'].mean()
+    #         print(f"  {regime.capitalize():8s}: {avg_return * 100:+6.2f}%")
+    #
+    # print("=" * 80 + "\n")
 
     return df[['Date', 'Regime', 'Rolling_Return']]
 

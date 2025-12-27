@@ -78,10 +78,31 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
     trigger_func = get_trigger_function(trigger_type)
 
     if trigger_type == 'rebalance_time_period':
+        from utils.date_utils import get_rebalance_trading_dates
+
+        frequency_map = {
+            'monthly': 'M',
+            'quarterly': 'Q',
+            'semi_annual': 'S',
+            'annual': 'A'
+        }
+
         frequency = trigger_params['frequency']
-        roll_dates_list = [pd.to_datetime(d) for d in roll_dates_dict[frequency]]
-        roll_dates_list = [d for d in roll_dates_list if start_date <= d <= end_date]
-        print(f"Using {frequency} rebalance dates: {len(roll_dates_list)} dates in period")
+        frequency_code = frequency_map.get(frequency, frequency)
+
+        # Get trading dates (T+1) for rebalancing
+        trading_date_pairs = get_rebalance_trading_dates(
+            rebalance_frequency=frequency_code,
+            roll_dates_dict=roll_dates_dict,
+            df_dates=df_enriched['Date'].unique(),
+            start_date=start_date,
+            end_date=end_date
+        )
+
+        # Use trading dates (not roll dates) for actual execution
+        trading_dates_list = [trading_date for roll_date, trading_date in trading_date_pairs]
+
+        print(f"Using {frequency} rebalance: {len(trading_dates_list)} trading dates (T+1) in period")
 
     # Main backtest loop
     for current_date in all_dates:
@@ -104,8 +125,8 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         # Update benchmark NAVs
         bench_data = df_bench[df_bench['Date'] == current_date]
         if not bench_data.empty:
-            spy_nav *= (1 + bench_data.iloc[0]['spy_return'])
-            bufr_nav *= (1 + bench_data.iloc[0]['bufr_return'])
+            spy_nav *= (1 + bench_data.iloc[0]['SPY_daily_return'])
+            bufr_nav *= (1 + bench_data.iloc[0]['BUFR_daily_return'])
 
         # Update buy-and-hold NAV (original launch month fund)
         hold_fund = series + launch_month
@@ -131,7 +152,7 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         trigger_reason = None
 
         if trigger_type == 'rebalance_time_period':
-            triggered = trigger_func(current_date, roll_dates_list)
+            triggered = trigger_func(current_date, trading_dates_list)
             if triggered:
                 trigger_reason = f"{frequency}_rebalance"
         else:

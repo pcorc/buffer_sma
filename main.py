@@ -123,7 +123,7 @@ def main():
     # =========================================================================
 
     try:
-        df_enriched = preprocess_fund_data(df_raw)
+        df_enriched = preprocess_fund_data(df_raw, roll_dates_dict)
     except Exception as e:
         print(f"\n❌ ERROR during preprocessing: {str(e)}")
         return
@@ -202,7 +202,7 @@ def main():
         trigger_summary = summarize_by_trigger_type(summary_df)
         selection_summary = summarize_by_selection_algo(summary_df)
 
-        print(f"\n📊 Summary Statistics:")
+        # print(f"\n📊 Summary Statistics:")
         perf_summary = create_performance_summary(summary_df)
         print(f"  Total backtests: {perf_summary['total_backtests']}")
         # print(f"  Avg vs BUFR: {perf_summary['avg_vs_bufr'] * 100:+.2f}%")
@@ -226,9 +226,9 @@ def main():
         regime_df = analyze_by_regime(results_list, df_regimes)
 
         regime_comparison = compare_regime_performance(regime_df)
-        print("\n📈 Performance by Regime:")
-        for _, row in regime_comparison.iterrows():
-            print(f"  {row['regime'].capitalize():8s}: {row['vs_bufr_excess'] * 100:+6.2f}% vs BUFR (avg)")
+        # print("\n📈 Performance by Regime:")
+        # for _, row in regime_comparison.iterrows():
+        #     print(f"  {row['regime'].capitalize():8s}: {row['vs_bufr_excess'] * 100:+6.2f}% vs BUFR (avg)")
 
         best_by_regime = find_best_by_regime(regime_df)
         # print("\n🏆 Best Strategy by Regime:")
@@ -261,13 +261,8 @@ def main():
         if not capture_ratios.empty:
             capture_ratios.to_csv(os.path.join(REGIME_DIR, 'capture_ratios.csv'), index=False)
 
-        # Export trade logs
         export_trade_logs(results_list, TRADE_LOG_DIR)
-
-        # Export summary report
         export_summary_stats(summary_df, regime_df, RESULTS_DIR)
-
-        print(f"\n✅ All results exported to: {RESULTS_DIR}")
 
     except Exception as e:
         print(f"\n❌ ERROR during export: {str(e)}")

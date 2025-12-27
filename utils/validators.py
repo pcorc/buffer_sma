@@ -169,11 +169,20 @@ def validate_roll_dates(roll_dates_dict):
     """
     errors = []
 
-    # Check required frequencies
-    required_freqs = ['monthly', 'quarterly', 'semi_annual', 'annual']
-    missing_freqs = [freq for freq in required_freqs if freq not in roll_dates_dict]
-    if missing_freqs:
-        errors.append(f"Missing required frequencies: {missing_freqs}")
+    # Check for either new format ('M', 'Q', 'S', 'A') or legacy format
+    new_format_keys = ['M', 'Q', 'S', 'A']
+    legacy_format_keys = ['monthly', 'quarterly', 'semi_annual', 'annual']
+
+    has_new_format = all(key in roll_dates_dict for key in new_format_keys)
+    has_legacy_format = all(key in roll_dates_dict for key in legacy_format_keys)
+
+    if not (has_new_format or has_legacy_format):
+        missing_new = [key for key in new_format_keys if key not in roll_dates_dict]
+        missing_legacy = [key for key in legacy_format_keys if key not in roll_dates_dict]
+        errors.append(
+            f"Missing required frequencies. Need either {new_format_keys} or {legacy_format_keys}. "
+            f"Missing new format: {missing_new}, Missing legacy format: {missing_legacy}"
+        )
 
     # Check that each frequency has dates
     for freq, dates in roll_dates_dict.items():

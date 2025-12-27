@@ -10,51 +10,78 @@ from datetime import datetime
 def export_results(summary_df, regime_df, output_dir):
     """
     Export consolidated results and regime analysis to CSV files.
+    Appends to existing files if they exist.
 
     Parameters:
       summary_df: Consolidated summary DataFrame
       regime_df: Regime-specific analysis DataFrame
       output_dir: Directory path for output files
     """
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"EXPORTING RESULTS")
-    print(f"{'='*80}")
-    print(f"Output directory: {output_dir}")
 
-    # Create timestamp for filenames
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
-    # Export summary
+    # =============================================================================
+    # EXPORT SUMMARY - APPEND MODE
+    # =============================================================================
+
+    # Path for cumulative results file
+    cumulative_summary_path = os.path.join(output_dir, 'backtest_results_cumulative.csv')
+
+    # Add run timestamp to each row
+    summary_df['run_timestamp'] = timestamp
+
+    if os.path.exists(cumulative_summary_path):
+        # Append to existing file
+        existing_df = pd.read_csv(cumulative_summary_path)
+        combined_df = pd.concat([existing_df, summary_df], ignore_index=True)
+        combined_df.to_csv(cumulative_summary_path, index=False)
+
+    else:
+        # Create new file
+        summary_df.to_csv(cumulative_summary_path, index=False)
+
+
+    # Also save timestamped version for backup
     summary_filename = f'backtest_results_{timestamp}.csv'
     summary_path = os.path.join(output_dir, summary_filename)
     summary_df.to_csv(summary_path, index=False)
-    print(f"  ✓ Saved: {summary_filename}")
-    print(f"    Rows: {len(summary_df)}")
 
     # Also save as "latest" for easy access
     latest_summary_path = os.path.join(output_dir, 'backtest_results_latest.csv')
     summary_df.to_csv(latest_summary_path, index=False)
-    print(f"  ✓ Saved: backtest_results_latest.csv")
 
-    # Export regime analysis
+    # =============================================================================
+    # EXPORT REGIME ANALYSIS - APPEND MODE
+    # =============================================================================
+
+    cumulative_regime_path = os.path.join(output_dir, 'regime_analysis_cumulative.csv')
+
+    # Add run timestamp
+    regime_df['run_timestamp'] = timestamp
+
+    if os.path.exists(cumulative_regime_path):
+        # Append to existing file
+        existing_regime = pd.read_csv(cumulative_regime_path)
+        combined_regime = pd.concat([existing_regime, regime_df], ignore_index=True)
+        combined_regime.to_csv(cumulative_regime_path, index=False)
+
+    else:
+        # Create new file
+        regime_df.to_csv(cumulative_regime_path, index=False)
+
+    # Save timestamped and latest versions
     regime_filename = f'regime_analysis_{timestamp}.csv'
     regime_path = os.path.join(output_dir, regime_filename)
     regime_df.to_csv(regime_path, index=False)
-    print(f"  ✓ Saved: {regime_filename}")
-    print(f"    Rows: {len(regime_df)}")
 
-    # Also save as "latest"
     latest_regime_path = os.path.join(output_dir, 'regime_analysis_latest.csv')
     regime_df.to_csv(latest_regime_path, index=False)
-    print(f"  ✓ Saved: regime_analysis_latest.csv")
 
-    print(f"{'='*80}\n")
 
     return summary_path, regime_path
-
 
 def export_trade_logs(results_list, output_dir):
     """

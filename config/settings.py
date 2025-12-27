@@ -42,6 +42,11 @@ LAUNCH_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
 # For testing, can use subset
 # LAUNCH_MONTHS = ['MAR', 'JUN', 'SEP', 'DEC']
 
+MONTH_MAP = {
+    'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
+    'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12
+}
+
 # =============================================================================
 # MARKET REGIME PARAMETERS
 # =============================================================================
@@ -63,31 +68,62 @@ COMBO_CONFIGS = [
         'trigger_params': {'frequency': 'quarterly'},
         'selection_func_name': 'select_most_recent_launch'
     },
-    {
-        'trigger_type': 'rebalance_time_period',
-        'trigger_params': {'frequency': 'quarterly'},
-        'selection_func_name': 'select_remaining_cap'
-    },
-    {
-        'trigger_type': 'rebalance_time_period',
-        'trigger_params': {'frequency': 'quarterly'},
-        'selection_func_name': 'select_cap_utilization'
-    },
-    {
-        'trigger_type': 'remaining_cap_threshold',
-        'trigger_params': {'threshold': 0.25},
-        'selection_func_name': 'select_most_recent_launch'
-    },
-    {
-        'trigger_type': 'cap_utilization_threshold',
-        'trigger_params': {'threshold': 0.75},
-        'selection_func_name': 'select_most_recent_launch'
-    },
-    {
-        'trigger_type': 'downside_before_buffer_threshold',
-        'trigger_params': {'threshold': 0.0},
-        'selection_func_name': 'select_most_recent_launch'
-    }
+    # {
+    #     'trigger_type': 'rebalance_time_period',
+    #     'trigger_params': {'frequency': 'quarterly'},
+    #     'selection_func_name': 'select_remaining_cap'
+    # },
+    # {
+    #     'trigger_type': 'rebalance_time_period',
+    #     'trigger_params': {'frequency': 'quarterly'},
+    #     'selection_func_name': 'select_cap_utilization'
+    # },
+    # {
+    #     'trigger_type': 'rebalance_time_period',
+    #     'trigger_params': {'frequency': 'quarterly'},
+    #     'selection_func_name': 'select_highest_outcome_and_cap'
+    # },
+    # {
+    #     'trigger_type': 'rebalance_time_period',
+    #     'trigger_params': {'frequency': 'quarterly'},
+    #     'selection_func_name': 'select_cost_analysis'
+    # }
+
+    #########################################################################
+    #########################################################################
+    #########################################################################
+
+    # {
+    #     'trigger_type': 'remaining_cap_threshold',
+    #     'trigger_params': {'threshold': 0.25},
+    #     'selection_func_name': 'select_most_recent_launch'
+    # },
+    # {
+    #     'trigger_type': 'cap_utilization_threshold',
+    #     'trigger_params': {'threshold': 0.75},
+    #     'selection_func_name': 'select_most_recent_launch'
+    # },
+    # {
+    #     'trigger_type': 'downside_before_buffer_threshold',
+    #     'trigger_params': {'threshold': 0.0},
+    #     'selection_func_name': 'select_most_recent_launch'
+    # }
+    # Test different cap utilization thresholds
+    # {
+    #     'trigger_type': 'cap_utilization_threshold',
+    #     'trigger_params': {'threshold': 0.50},  # Switch at 50% cap used
+    #     'selection_func_name': 'select_most_recent_launch'
+    # },
+    # {
+    #     'trigger_type': 'cap_utilization_threshold',
+    #     'trigger_params': {'threshold': 0.75},  # Switch at 75% cap used
+    #     'selection_func_name': 'select_most_recent_launch'
+    # },
+    # {
+    #     'trigger_type': 'cap_utilization_threshold',
+    #     'trigger_params': {'threshold': 0.90},  # Switch at 90% cap used
+    #     'selection_func_name': 'select_most_recent_launch'
+    # },
 ]
 
 # =============================================================================
