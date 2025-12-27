@@ -17,6 +17,8 @@ from datetime import datetime
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
+import traceback
+
 # Import configuration
 from config.settings import (
     DATA_FILE, BENCHMARK_FILE, ROLL_DATES_FILE,
@@ -40,13 +42,23 @@ from core.selections import get_selection_function
 from backtesting.engine import run_single_ticker_backtest
 
 # Import analysis
-from analysis.consolidator import consolidate_results
+from analysis.consolidator import (
+    consolidate_results,
+    create_performance_summary,
+    summarize_by_launch_month,
+    summarize_by_trigger_type,
+    summarize_by_selection_algo
+)
 
 # Import utilities
 from utils.validators import (
     validate_fund_data, validate_benchmark_data,
     validate_roll_dates, print_validation_results
 )
+
+# Export consolidated Excel workbook
+from utils.excel_exporter import export_consolidated_workbook
+from utils.excel_exporter import export_consolidated_workbook_append
 
 
 def main():
@@ -67,12 +79,7 @@ def main():
     FILTER_SELECTION_ALGOS = None  # Example: ['select_most_recent_launch']
 
     print("\n" + "#" * 80)
-    print("# SINGLE FUND TEST MODE")
-    print("#" * 80)
-    print(f"Testing: {TEST_SERIES}{TEST_LAUNCH_MONTH}")
-    print("#" * 80 + "\n")
-
-    start_time = datetime.now()
+    print("# SINGLE FUND TEST MODE" + f"Testing: {TEST_SERIES}{TEST_LAUNCH_MONTH}")
 
     # =============================================================================
     # STEP 1: LOAD DATA
@@ -122,8 +129,6 @@ def main():
         print("❌ Cannot proceed without data alignment")
         return
 
-    print(f"✅ Data range: {common_start.date()} to {common_end.date()}")
-
     # =============================================================================
     # STEP 3: PREPROCESS DATA
     # =============================================================================
@@ -143,7 +148,6 @@ def main():
     # DETAILED INSPECTION OF TEST FUND
     # =============================================================================
 
-    print("\n" + "=" * 80)
     print(f"INSPECTING {TEST_SERIES}{TEST_LAUNCH_MONTH} DATA")
     print("=" * 80)
 
@@ -153,14 +157,13 @@ def main():
     if fund_data.empty:
         print(f"❌ ERROR: No data found for {test_fund}")
         return
-
-    print(f"\nData Summary:")
-    print(f"  Date range: {fund_data['Date'].min().date()} to {fund_data['Date'].max().date()}")
-    print(f"  Total observations: {len(fund_data):,}")
-    print(f"  Unique outcome periods: {fund_data['Outcome_Period_ID'].nunique()}")
+    #
+    # print(f"\nData Summary:")
+    # print(f"  Date range: {fund_data['Date'].min().date()} to {fund_data['Date'].max().date()}")
+    # print(f"  Total observations: {len(fund_data):,}")
+    # print(f"  Unique outcome periods: {fund_data['Outcome_Period_ID'].nunique()}")
 
     # Show outcome periods
-    print(f"\nOutcome Periods:")
     period_summary = fund_data.groupby('Outcome_Period_ID').agg({
         'Date': ['min', 'max', 'count'],
         'Roll_Date': 'first',
@@ -174,21 +177,17 @@ def main():
         days = row[('Date', 'count')]
         roll_date = row[('Roll_Date', 'first')]
         orig_cap = row[('Original_Cap', 'first')]
-
-        print(f"  {period_id}:")
-        print(f"    Roll Date: {roll_date.date()}")
-        print(f"    Period: {start_date.date()} to {end_date.date()} ({days} days)")
-        print(f"    Original Cap: {orig_cap:.2%}")
+        # print(f"  {period_id}:")
+        # print(f"    Roll Date: {roll_date.date()}")
+        # print(f"    Period: {start_date.date()} to {end_date.date()} ({days} days)")
+        # print(f"    Original Cap: {orig_cap:.2%}")
 
     # Show sample of derived metrics
-    print(f"\nSample Derived Metrics (first 5 rows):")
     sample_cols = [
         'Date', 'Fund Value (USD)', 'Original_Cap', 'Current_Remaining_Cap',
         'Cap_Utilization', 'Cap_Remaining_Pct', 'Outcome_Period_ID'
     ]
-    print(fund_data[sample_cols].head().to_string(index=False))
 
-    print("=" * 80 + "\n")
 
     # =============================================================================
     # STEP 4: CLASSIFY MARKET REGIMES
@@ -247,9 +246,6 @@ def main():
     results_list = []
 
     for i, combo in enumerate(trigger_selection_combos, 1):
-        print(f"\n{'─' * 80}")
-        print(f"Test {i}/{len(trigger_selection_combos)}")
-        print(f"{'─' * 80}")
 
         try:
             selection_func = get_selection_function(combo['selection_func_name'])
@@ -273,12 +269,8 @@ def main():
                 print(f"⚠️  No result returned")
 
         except Exception as e:
-            print(f"\n❌ ERROR in backtest:")
-            print(f"   Trigger: {combo['trigger_type']}")
-            print(f"   Selection: {combo['selection_func_name']}")
+            print(f"\n❌ ERROR in backtest:" + f"   Trigger: {combo['trigger_type']}" +f"   Selection: {combo['selection_func_name']}")
             print(f"   Error: {str(e)}")
-            import traceback
-            traceback.print_exc()
 
     if not results_list:
         print("\n❌ No successful backtests. Exiting.")
@@ -287,66 +279,82 @@ def main():
     # =============================================================================
     # STEP 7: ANALYZE RESULTS
     # =============================================================================
-
-    print("\n" + "=" * 80)
-    print(f"RESULTS SUMMARY FOR {test_fund}")
-    print("=" * 80)
-
     summary_df = consolidate_results(results_list)
-
-    # Display detailed results
-    print(f"\n{len(summary_df)} successful backtests completed\n")
-
-    for idx, row in summary_df.iterrows():
-        print(f"{idx + 1}. {row['trigger_type']} + {row['selection_algo']}")
-        print(f"   Period: {row['start_date'].date()} to {row['end_date'].date()}")
-        print(f"   Strategy Return: {row['strategy_return'] * 100:+6.2f}% (Ann: {row['strategy_ann_return'] * 100:+6.2f}%)")
-        print(f"   vs SPY:   {row['vs_spy_excess'] * 100:+6.2f}%")
-        print(f"   vs BUFR:  {row['vs_bufr_excess'] * 100:+6.2f}%")
-        print(f"   vs Hold:  {row['vs_hold_excess'] * 100:+6.2f}%")
-        print(f"   Sharpe:   {row['strategy_sharpe']:6.2f}")
-        print(f"   Max DD:   {row['strategy_max_dd'] * 100:6.2f}%")
-        print(f"   Trades:   {row['num_trades']:.0f}")
-        print()
-
-    # =============================================================================
-    # STEP 8: EXPORT DETAILED RESULTS
-    # =============================================================================
-
-    print("\nSTEP 8: Exporting detailed results...")
-    print("-" * 80)
 
     # Create test output directory
     test_output_dir = os.path.join(RESULTS_DIR, f'test_{test_fund.lower()}')
     os.makedirs(test_output_dir, exist_ok=True)
 
-    # Export summary
+    # Export consolidated Excel workbook
+    workbook_path = export_consolidated_workbook(
+        results_list=results_list,
+        summary_df=summary_df,
+        output_dir=test_output_dir,
+        run_name=f'{test_fund.lower()}_test'
+    )
+
+    # Also export summary CSV for quick access
     summary_path = os.path.join(test_output_dir, f'{test_fund.lower()}_summary.csv')
     summary_df.to_csv(summary_path, index=False)
-    print(f"✅ Saved summary: {summary_path}")
 
-    # Export daily performance for each backtest
-    for result in results_list:
-        trigger_short = result['trigger_type'].replace('_', '')[:10]
-        selection_short = result['selection_algo'].replace('_', '')[:10]
-        filename = f"{test_fund.lower()}_daily_{trigger_short}_{selection_short}.csv"
-        filepath = os.path.join(test_output_dir, filename)
-        result['daily_performance'].to_csv(filepath, index=False)
-        print(f"✅ Saved daily NAV: {filename}")
+    # Optional: Export aggregated summaries if multiple combos tested
+    if len(summary_df) > 1:
+        from analysis.consolidator import summarize_by_trigger_type, summarize_by_selection_algo
 
-    # Export trade logs
-    for result in results_list:
-        if not result['trade_history'].empty:
-            trigger_short = result['trigger_type'].replace('_', '')[:10]
-            selection_short = result['selection_algo'].replace('_', '')[:10]
-            filename = f"{test_fund.lower()}_trades_{trigger_short}_{selection_short}.csv"
-            filepath = os.path.join(test_output_dir, filename)
-            result['trade_history'].to_csv(filepath, index=False)
-            print(f"✅ Saved trades: {filename}")
+        trigger_summary = summarize_by_trigger_type(summary_df)
+        selection_summary = summarize_by_selection_algo(summary_df)
+
+        trigger_summary.to_csv(os.path.join(test_output_dir, 'summary_by_trigger.csv'), index=False)
+        selection_summary.to_csv(os.path.join(test_output_dir, 'summary_by_selection.csv'), index=False)
+
+    # =========================================================================
+    # STEP 9: EXPORT RESULTS
+    # =========================================================================
+    try:
+        workbook_path = export_consolidated_workbook_append(
+            results_list=results_list,
+            summary_df=summary_df,
+            output_dir=RESULTS_DIR,
+            run_name='backtest'
+        )
+
+        # Export additional summary CSVs for programmatic access
+        month_summary.to_csv(os.path.join(RESULTS_DIR, 'summary_by_month.csv'), index=False)
+        trigger_summary.to_csv(os.path.join(RESULTS_DIR, 'summary_by_trigger.csv'), index=False)
+        selection_summary.to_csv(os.path.join(RESULTS_DIR, 'summary_by_selection.csv'), index=False)
+
+        if not capture_ratios.empty:
+            capture_ratios.to_csv(os.path.join(REGIME_DIR, 'capture_ratios.csv'), index=False)
+
+
+    except Exception as e:
+        print(f"\n❌ ERROR during export: {str(e)}")
+        traceback.print_exc()
+
 
     # =============================================================================
     # STEP 9: SHOW BEST PERFORMER
     # =============================================================================
+
+
+    # print("\n" + "=" * 80)
+    # print(f"RESULTS SUMMARY FOR {test_fund}")
+    # print("=" * 80)
+    #
+    # # Display detailed results
+    # print(f"\n{len(summary_df)} successful backtests completed\n")
+    #
+    # for idx, row in summary_df.iterrows():
+    #     print(f"{idx + 1}. {row['trigger_type']} + {row['selection_algo']}")
+    #     print(f"   Period: {row['start_date'].date()} to {row['end_date'].date()}")
+    #     print(f"   Strategy Return: {row['strategy_return'] * 100:+6.2f}% (Ann: {row['strategy_ann_return'] * 100:+6.2f}%)")
+    #     print(f"   vs SPY:   {row['vs_spy_excess'] * 100:+6.2f}%")
+    #     print(f"   vs BUFR:  {row['vs_bufr_excess'] * 100:+6.2f}%")
+    #     print(f"   vs Hold:  {row['vs_hold_excess'] * 100:+6.2f}%")
+    #     print(f"   Sharpe:   {row['strategy_sharpe']:6.2f}")
+    #     print(f"   Max DD:   {row['strategy_max_dd'] * 100:6.2f}%")
+    #     print(f"   Trades:   {row['num_trades']:.0f}")
+    #     print()
 
     # print("\n" + "=" * 80)
     # print("BEST PERFORMER (vs BUFR)")
@@ -366,9 +374,6 @@ def main():
     # COMPLETION
     # =============================================================================
 
-    end_time = datetime.now()
-    duration = end_time - start_time
-
     print("\n" + "#" * 80)
     print("# TEST COMPLETE")
 
@@ -381,6 +386,4 @@ if __name__ == '__main__':
         print("\n\n⚠️  Execution interrupted by user")
     except Exception as e:
         print(f"\n\n❌ Unexpected error: {str(e)}")
-        import traceback
-
         traceback.print_exc()
