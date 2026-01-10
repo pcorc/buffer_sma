@@ -19,9 +19,6 @@ def consolidate_results(results_list):
     Returns:
       DataFrame with one row per backtest, sorted by vs_bufr_excess (descending)
     """
-    print("\n" + "=" * 80)
-    print("CONSOLIDATING RESULTS")
-    print("=" * 80)
 
     if not results_list:
         print("ERROR: No results to consolidate!")
@@ -68,9 +65,6 @@ def consolidate_results(results_list):
 
     # Sort by vs_bufr_excess (descending) to see best performers first
     summary_df = summary_df.sort_values('vs_bufr_excess', ascending=False).reset_index(drop=True)
-
-    print(f"Consolidation complete: {len(summary_df)} backtests summarized")
-    print("=" * 80 + "\n")
 
     return summary_df
 

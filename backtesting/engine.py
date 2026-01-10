@@ -59,11 +59,14 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
     df_bench = df_bench[(df_bench['Date'] >= start_date) & (df_bench['Date'] <= end_date)].copy()
     df_bench = df_bench.sort_values('Date').reset_index(drop=True)
 
-    # Initialize tracking
+    # Initialize tracking - all start at 100
     strategy_nav = 100.0
     spy_nav = 100.0
     bufr_nav = 100.0
     hold_nav = 100.0
+
+    # Track if this is the first day (to handle initialization)
+    first_day = True
 
     daily_performance = []
     trade_history = []
@@ -119,23 +122,28 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         current_fund_row = current_fund_data.iloc[0]
         daily_return = current_fund_row['daily_return']
 
-        # Update strategy NAV
-        strategy_nav *= (1 + daily_return)
+        # On first day, just initialize NAVs at 100 without applying returns
+        if first_day:
+            # All NAVs stay at 100 on first day
+            first_day = False
+        else:
+            # Update strategy NAV with daily return
+            strategy_nav *= (1 + daily_return)
 
-        # Update benchmark NAVs
-        bench_data = df_bench[df_bench['Date'] == current_date]
-        if not bench_data.empty:
-            spy_nav *= (1 + bench_data.iloc[0]['SPY_daily_return'])
-            bufr_nav *= (1 + bench_data.iloc[0]['BUFR_daily_return'])
+            # Update benchmark NAVs
+            bench_data = df_bench[df_bench['Date'] == current_date]
+            if not bench_data.empty:
+                spy_nav *= (1 + bench_data.iloc[0]['SPY_daily_return'])
+                bufr_nav *= (1 + bench_data.iloc[0]['BUFR_daily_return'])
 
-        # Update buy-and-hold NAV (original launch month fund)
-        hold_fund = series + launch_month
-        hold_data = df_enriched[
-            (df_enriched['Fund'] == hold_fund) &
-            (df_enriched['Date'] == current_date)
-            ]
-        if not hold_data.empty:
-            hold_nav *= (1 + hold_data.iloc[0]['daily_return'])
+            # Update buy-and-hold NAV (original launch month fund)
+            hold_fund = series + launch_month
+            hold_data = df_enriched[
+                (df_enriched['Fund'] == hold_fund) &
+                (df_enriched['Date'] == current_date)
+                ]
+            if not hold_data.empty:
+                hold_nav *= (1 + hold_data.iloc[0]['daily_return'])
 
         # Store daily performance
         daily_performance.append({

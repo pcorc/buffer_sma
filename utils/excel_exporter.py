@@ -10,24 +10,28 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils.dataframe import dataframe_to_rows
 
 
-def export_consolidated_workbook(results_list, summary_df, output_dir, run_name='backtest'):
+def export_consolidated_workbook(results_list, summary_df, output_dir, run_name='backtest', df_regimes=None):
     """
     Export all backtest results to a single Excel workbook with multiple tabs.
 
     Workbook Structure:
     - Tab 1: Summary (all iterations with key metrics)
     - Tab 2: Trade Log (all trades with iteration details)
-    - Tab 3+: Daily Time Series for each iteration
+    - Tab 3+: Daily Time Series for each iteration (with regime data if provided)
 
     Parameters:
         results_list: List of result dicts from run_single_ticker_backtest
         summary_df: Consolidated summary DataFrame
         output_dir: Directory path for output file
         run_name: Name prefix for the workbook file
+        df_regimes: Optional DataFrame with Date and Regime columns
 
     Returns:
         Path to created workbook
     """
+    # print(f"\n{'=' * 80}")
+    # print(f"CREATING CONSOLIDATED EXCEL WORKBOOK")
+    # print(f"{'=' * 80}")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -104,11 +108,16 @@ def export_consolidated_workbook(results_list, summary_df, output_dir, run_name=
             trades['trigger_params'] = str(result['trigger_params'])
             trades['selection_algo'] = result['selection_algo']
 
-            # Add selection reason by looking at the fund that was selected
+            # Add selection reason
             trades['Selection_Reason'] = trades.apply(
                 lambda row: _get_selection_reason(result['selection_algo'], row['To_Fund']),
                 axis=1
             )
+
+            # Add regime if available
+            if df_regimes is not None:
+                trades = trades.merge(df_regimes[['Date', 'Regime']], on='Date', how='left')
+                trades['Regime'] = trades['Regime'].fillna('unknown')
 
             all_trades.append(trades)
 
@@ -116,12 +125,16 @@ def export_consolidated_workbook(results_list, summary_df, output_dir, run_name=
             combined_trades = pd.concat(all_trades, ignore_index=True)
 
             # Reorder columns for better readability
-            col_order = [
+            base_cols = [
                 'iteration', 'Date', 'launch_month', 'trigger_type', 'trigger_params',
                 'selection_algo', 'From_Fund', 'To_Fund', 'Trigger_Reason',
                 'Selection_Reason', 'NAV_at_Switch'
             ]
-            combined_trades = combined_trades[col_order]
+
+            if df_regimes is not None and 'Regime' in combined_trades.columns:
+                base_cols.insert(2, 'Regime')
+
+            combined_trades = combined_trades[base_cols]
 
             combined_trades.to_excel(writer, sheet_name='Trade Log', index=False)
 
@@ -173,6 +186,15 @@ def export_consolidated_workbook(results_list, summary_df, output_dir, run_name=
             daily.insert(2, 'trigger_type', result['trigger_type'])
             daily.insert(3, 'selection_algo', result['selection_algo'])
 
+            # Add regime information if available
+            if df_regimes is not None:
+                daily = daily.merge(df_regimes[['Date', 'Regime']], on='Date', how='left')
+                daily['Regime'] = daily['Regime'].fillna('unknown')
+                # Move Regime column to position 4 (after selection_algo)
+                cols = list(daily.columns)
+                cols.insert(4, cols.pop(cols.index('Regime')))
+                daily = daily[cols]
+
             # Add trade indicator
             daily['Trade_Occurred'] = False
             if not result['trade_history'].empty:
@@ -206,13 +228,14 @@ def export_consolidated_workbook(results_list, summary_df, output_dir, run_name=
                 cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
             # Auto-adjust columns (but faster than full iteration)
-            for column_letter in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']:
+            for column_letter in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L']:
                 worksheet.column_dimensions[column_letter].width = 15
 
             worksheet.freeze_panes = 'A2'
 
-    return filepath
 
+
+    return filepath
 
 def _get_selection_reason(selection_algo: str, selected_fund: str) -> str:
     """
@@ -238,16 +261,22 @@ def _get_selection_reason(selection_algo: str, selected_fund: str) -> str:
 
 def export_consolidated_workbook_append(results_list, summary_df, output_dir, run_name='backtest'):
     """
-    Export results and append to cumulative workbook if it exists.
+    Export all backtest results to a single Excel workbook with multiple tabs.
+
+    Workbook Structure:
+    - Tab 1: Summary (all iterations with key metrics)
+    - Tab 2: Trade Log (all trades with iteration details)
+    - Tab 3+: Daily Time Series for each iteration (with regime data if provided)
 
     Parameters:
         results_list: List of result dicts from run_single_ticker_backtest
         summary_df: Consolidated summary DataFrame
         output_dir: Directory path for output file
         run_name: Name prefix for the workbook file
+        df_regimes: Optional DataFrame with Date and Regime columns
 
     Returns:
-        Path to created/updated workbook
+        Path to created workbook
     """
     # First create the timestamped version
     timestamped_path = export_consolidated_workbook(results_list, summary_df, output_dir, run_name)
@@ -299,6 +328,7 @@ def export_consolidated_workbook_append(results_list, summary_df, output_dir, ru
                 combined_trades = new_trades
         else:
             combined_trades = existing_trades
+
 
         # Write updated cumulative workbook
         with pd.ExcelWriter(cumulative_path, engine='openpyxl') as writer:

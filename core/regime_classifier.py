@@ -38,7 +38,7 @@ def classify_market_regimes(df_spy, window_months=6, bull_threshold=0.10, bear_t
 
     # Calculate rolling returns
     window_days = window_months * 21  # Approximate trading days per month
-    df['Rolling_Return'] = df['Ref_Index'].pct_change(periods=window_days)
+    df['Rolling_Return'] = df['Ref_Index'].pct_change(periods=window_days, fill_method=None)
 
     # Classify regimes
     def classify_regime(rolling_return):

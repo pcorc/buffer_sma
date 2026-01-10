@@ -20,9 +20,6 @@ def analyze_by_regime(results_list, df_regimes):
     Returns:
       DataFrame with regime-specific performance metrics
     """
-    print("\n" + "=" * 80)
-    print("ANALYZING PERFORMANCE BY REGIME")
-    print("=" * 80)
 
     if not results_list:
         print("ERROR: No results to analyze!")
@@ -91,9 +88,6 @@ def analyze_by_regime(results_list, df_regimes):
             regime_records.append(regime_record)
 
     regime_df = pd.DataFrame(regime_records)
-
-    print(f"Regime analysis complete: {len(regime_df)} regime-specific records created")
-    print("=" * 80 + "\n")
 
     return regime_df
 

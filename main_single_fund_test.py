@@ -43,11 +43,13 @@ from backtesting.engine import run_single_ticker_backtest
 
 # Import analysis
 from analysis.consolidator import (
-    consolidate_results,
-    create_performance_summary,
-    summarize_by_launch_month,
-    summarize_by_trigger_type,
+    consolidate_results, create_performance_summary,
+    summarize_by_launch_month, summarize_by_trigger_type,
     summarize_by_selection_algo
+)
+from analysis.regime_analyzer import (
+    analyze_by_regime, compare_regime_performance,
+    find_best_by_regime, calculate_capture_ratios
 )
 
 # Import utilities
@@ -58,7 +60,6 @@ from utils.validators import (
 
 # Export consolidated Excel workbook
 from utils.excel_exporter import export_consolidated_workbook
-from utils.excel_exporter import export_consolidated_workbook_append
 
 
 def main():
@@ -279,61 +280,117 @@ def main():
     # =============================================================================
     # STEP 7: ANALYZE RESULTS
     # =============================================================================
-    summary_df = consolidate_results(results_list)
+    print("\n" + "=" * 80)
+    print(f"ANALYZING RESULTS FOR {test_fund}")
+    print("=" * 80)
 
-    # Create test output directory
-    test_output_dir = os.path.join(RESULTS_DIR, f'test_{test_fund.lower()}')
-    os.makedirs(test_output_dir, exist_ok=True)
-
-    # Export consolidated Excel workbook
-    workbook_path = export_consolidated_workbook(
-        results_list=results_list,
-        summary_df=summary_df,
-        output_dir=test_output_dir,
-        run_name=f'{test_fund.lower()}_test'
-    )
-
-    # Also export summary CSV for quick access
-    summary_path = os.path.join(test_output_dir, f'{test_fund.lower()}_summary.csv')
-    summary_df.to_csv(summary_path, index=False)
-
-    # Optional: Export aggregated summaries if multiple combos tested
-    if len(summary_df) > 1:
-        from analysis.consolidator import summarize_by_trigger_type, summarize_by_selection_algo
-
-        trigger_summary = summarize_by_trigger_type(summary_df)
-        selection_summary = summarize_by_selection_algo(summary_df)
-
-        trigger_summary.to_csv(os.path.join(test_output_dir, 'summary_by_trigger.csv'), index=False)
-        selection_summary.to_csv(os.path.join(test_output_dir, 'summary_by_selection.csv'), index=False)
-
-    # =========================================================================
-    # STEP 9: EXPORT RESULTS
-    # =========================================================================
     try:
-        workbook_path = export_consolidated_workbook_append(
+        # Consolidate results
+        summary_df = consolidate_results(results_list)
+
+        print(f"\n✅ {len(summary_df)} successful backtests completed")
+
+        # =======================================================================
+        # REGIME ANALYSIS
+        # =======================================================================
+
+        regime_df = analyze_by_regime(results_list, df_regimes)
+        # Calculate capture ratios
+        capture_ratios = calculate_capture_ratios(regime_df)
+
+        print("\nAnalyzing performance by market regime...")
+        print("-" * 80)
+
+        # if not regime_df.empty:
+        #     # Show regime breakdown
+        #     regime_comparison = compare_regime_performance(regime_df)
+        #
+        #     print("\n📈 Performance by Regime (Average across all tests):")
+        #     for _, row in regime_comparison.iterrows():
+        #         print(f"  {row['regime'].capitalize():8s}: "
+        #               f"Strategy {row['strategy_return'] * 100:+6.2f}% | "
+        #               f"vs BUFR {row['vs_bufr_excess'] * 100:+6.2f}% | "
+        #               f"{row['days_in_regime']:.0f} days")
+        #
+        #     # Find best strategy for each regime
+        #     best_by_regime = find_best_by_regime(regime_df)
+        #
+        #     print("\n🏆 Best Strategy by Regime:")
+        #     for regime, best in best_by_regime.items():
+        #         print(f"  {regime.capitalize():8s}: {best['trigger_type'][:25]} + {best['selection_algo'][:25]}")
+        #         print(f"             vs BUFR: {best['vs_bufr_excess'] * 100:+6.2f}%")
+        #
+        #     if not capture_ratios.empty:
+        #         print("\n📊 Capture Ratios (Strategy Return / SPY Return):")
+        #         for _, row in capture_ratios.iterrows():
+        #             upside = row['upside_capture']
+        #             downside = row['downside_capture']
+        #             print(f"  {row['trigger_type'][:20]} + {row['selection_algo'][:20]}")
+        #             if pd.notna(upside):
+        #                 print(f"    Upside:   {upside:.2f}x")
+        #             else:
+        #                 print(f"    Upside:   N/A")
+        #             if pd.notna(downside):
+        #                 print(f"    Downside: {downside:.2f}x")
+        #             else:
+        #                 print(f"    Downside: N/A")
+        # else:
+        #     regime_df = pd.DataFrame()
+        #     capture_ratios = pd.DataFrame()
+        #     print("  ⚠️  No regime data available")
+
+        # =======================================================================
+        # EXPORT TO EXCEL
+        # =======================================================================
+
+        print("\nExporting consolidated workbook...")
+
+        # Create test output directory
+        test_output_dir = os.path.join(RESULTS_DIR, f'test_{test_fund.lower()}')
+        os.makedirs(test_output_dir, exist_ok=True)
+
+        # Export consolidated Excel workbook with regime data
+        workbook_path = export_consolidated_workbook(
             results_list=results_list,
             summary_df=summary_df,
-            output_dir=RESULTS_DIR,
-            run_name='backtest'
+            output_dir=test_output_dir,
+            run_name=f'{test_fund.lower()}_test',
+            df_regimes=df_regimes
         )
 
-        # Export additional summary CSVs for programmatic access
-        month_summary.to_csv(os.path.join(RESULTS_DIR, 'summary_by_month.csv'), index=False)
-        trigger_summary.to_csv(os.path.join(RESULTS_DIR, 'summary_by_trigger.csv'), index=False)
-        selection_summary.to_csv(os.path.join(RESULTS_DIR, 'summary_by_selection.csv'), index=False)
+        # Export aggregated summaries
+        if len(summary_df) > 1:
+            print("\nCreating aggregated summaries...")
 
-        if not capture_ratios.empty:
-            capture_ratios.to_csv(os.path.join(REGIME_DIR, 'capture_ratios.csv'), index=False)
+            trigger_summary = summarize_by_trigger_type(summary_df)
+            selection_summary = summarize_by_selection_algo(summary_df)
 
+            trigger_summary.to_csv(os.path.join(test_output_dir, 'summary_by_trigger.csv'), index=False)
+            selection_summary.to_csv(os.path.join(test_output_dir, 'summary_by_selection.csv'), index=False)
+
+            print(f"  ✓ Saved summary_by_trigger and selection.csv files")
+
+            # Export regime analysis with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            if not regime_df.empty:
+                regime_filename = f'regime_analysis_{timestamp}.csv'
+                regime_path = os.path.join(test_output_dir, regime_filename)
+                regime_df.to_csv(regime_path, index=False)
+
+            if not capture_ratios.empty:
+                capture_filename = f'capture_ratios_{timestamp}.csv'
+                capture_path = os.path.join(test_output_dir, capture_filename)
+                capture_ratios.to_csv(capture_path, index=False)
 
     except Exception as e:
-        print(f"\n❌ ERROR during export: {str(e)}")
+        print(f"\n❌ ERROR during analysis/export: {str(e)}")
+        import traceback
         traceback.print_exc()
-
+        return
 
     # =============================================================================
-    # STEP 9: SHOW BEST PERFORMER
+    # STEP 8: SHOW BEST PERFORMER
     # =============================================================================
 
 
