@@ -157,7 +157,8 @@ def main():
         combo = {
             'trigger_type': config['trigger_type'],
             'trigger_params': config['trigger_params'],
-            'selection_func_name': config['selection_func_name']
+            'selection_func_name': config['selection_func_name'],
+            'launch_months': config.get('launch_months', LAUNCH_MONTHS)
         }
         trigger_selection_combos.append(combo)
 
@@ -174,7 +175,6 @@ def main():
             df_benchmarks=df_benchmarks,
             roll_dates_dict=roll_dates_dict,
             trigger_selection_combos=trigger_selection_combos,
-            launch_months=LAUNCH_MONTHS,
             series=SERIES
         )
     except Exception as e:

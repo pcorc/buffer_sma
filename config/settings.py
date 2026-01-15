@@ -66,18 +66,21 @@ COMBO_CONFIGS = [
     {
         'trigger_type': 'rebalance_time_period',
         'trigger_params': {'frequency': 'quarterly'},
-        'selection_func_name': 'select_most_recent_launch'
+        'selection_func_name': 'select_most_recent_launch',
+        'launch_months': ['MAR', 'JUN', 'SEP', 'DEC']
     },
-    # {
-    #     'trigger_type': 'rebalance_time_period',
-    #     'trigger_params': {'frequency': 'quarterly'},
-    #     'selection_func_name': 'select_remaining_cap'
-    # },
-    # {
-    #     'trigger_type': 'rebalance_time_period',
-    #     'trigger_params': {'frequency': 'quarterly'},
-    #     'selection_func_name': 'select_cap_utilization'
-    # },
+    {
+        'trigger_type': 'rebalance_time_period',
+        'trigger_params': {'frequency': 'quarterly'},
+        'selection_func_name': 'select_remaining_cap',
+        'launch_months': ['MAR', 'JUN', 'SEP', 'DEC']
+    },
+    {
+        'trigger_type': 'rebalance_time_period',
+        'trigger_params': {'frequency': 'quarterly'},
+        'selection_func_name': 'select_cap_utilization',
+        'launch_months': ['MAR', 'JUN', 'SEP', 'DEC']
+    },
     # {
     #     'trigger_type': 'rebalance_time_period',
     #     'trigger_params': {'frequency': 'quarterly'},

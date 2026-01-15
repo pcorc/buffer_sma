@@ -10,14 +10,20 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils.dataframe import dataframe_to_rows
 
 
-def export_consolidated_workbook(results_list, summary_df, output_dir, run_name='backtest', df_regimes=None):
+def export_consolidated_workbook(results_list, summary_df, output_dir, run_name='backtest',
+                                 df_regimes=None, regime_df=None, capture_ratios=None,
+                                 trigger_summary=None, selection_summary=None):
     """
     Export all backtest results to a single Excel workbook with multiple tabs.
 
     Workbook Structure:
     - Tab 1: Summary (all iterations with key metrics)
     - Tab 2: Trade Log (all trades with iteration details)
-    - Tab 3+: Daily Time Series for each iteration (with regime data if provided)
+    - Tab 3: Regime Analysis (regime-specific performance)
+    - Tab 4: Capture Ratios (upside/downside capture)
+    - Tab 5: Trigger Summary (aggregated by trigger type)
+    - Tab 6: Selection Summary (aggregated by selection algo)
+    - Tab 7+: Daily Time Series for each iteration (with regime data)
 
     Parameters:
         results_list: List of result dicts from run_single_ticker_backtest
@@ -25,13 +31,17 @@ def export_consolidated_workbook(results_list, summary_df, output_dir, run_name=
         output_dir: Directory path for output file
         run_name: Name prefix for the workbook file
         df_regimes: Optional DataFrame with Date and Regime columns
+        regime_df: Optional DataFrame with regime-specific analysis
+        capture_ratios: Optional DataFrame with capture ratios
+        trigger_summary: Optional DataFrame with trigger aggregation
+        selection_summary: Optional DataFrame with selection aggregation
 
     Returns:
         Path to created workbook
     """
-    # print(f"\n{'=' * 80}")
-    # print(f"CREATING CONSOLIDATED EXCEL WORKBOOK")
-    # print(f"{'=' * 80}")
+    print(f"\n{'=' * 80}")
+    print(f"CREATING CONSOLIDATED EXCEL WORKBOOK")
+    print(f"{'=' * 80}")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -45,6 +55,8 @@ def export_consolidated_workbook(results_list, summary_df, output_dir, run_name=
         # =====================================================================
         # TAB 1: SUMMARY
         # =====================================================================
+
+        print("  Creating Summary tab...")
 
         # Add iteration number for clarity
         summary_export = summary_df.copy()
@@ -89,9 +101,13 @@ def export_consolidated_workbook(results_list, summary_df, output_dir, run_name=
         # Freeze header row
         worksheet.freeze_panes = 'A2'
 
+        print(f"    ✓ Summary: {len(summary_export)} iterations")
+
         # =====================================================================
         # TAB 2: TRADE LOG
         # =====================================================================
+
+        print("  Creating Trade Log tab...")
 
         all_trades = []
 
@@ -160,12 +176,171 @@ def export_consolidated_workbook(results_list, summary_df, output_dir, run_name=
 
             worksheet.freeze_panes = 'A2'
 
+            print(f"    ✓ Trade Log: {len(combined_trades)} trades")
         else:
             print(f"    ⚠ No trades to export")
 
         # =====================================================================
-        # TAB 3+: DAILY TIME SERIES FOR EACH ITERATION
+        # TAB 3: REGIME ANALYSIS
         # =====================================================================
+
+        if regime_df is not None and not regime_df.empty:
+            print("  Creating Regime Analysis tab...")
+
+            regime_export = regime_df.copy()
+
+            # Round numeric columns
+            numeric_cols = regime_export.select_dtypes(include=['float64']).columns
+            regime_export[numeric_cols] = regime_export[numeric_cols].round(4)
+
+            regime_export.to_excel(writer, sheet_name='Regime Analysis', index=False)
+
+            # Format sheet
+            worksheet = writer.sheets['Regime Analysis']
+
+            for cell in worksheet[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+
+            worksheet.freeze_panes = 'A2'
+
+            print(f"    ✓ Regime Analysis: {len(regime_export)} records")
+
+        # =====================================================================
+        # TAB 4: CAPTURE RATIOS
+        # =====================================================================
+
+        if capture_ratios is not None and not capture_ratios.empty:
+            print("  Creating Capture Ratios tab...")
+
+            capture_export = capture_ratios.copy()
+
+            # Round numeric columns
+            numeric_cols = capture_export.select_dtypes(include=['float64']).columns
+            capture_export[numeric_cols] = capture_export[numeric_cols].round(4)
+
+            capture_export.to_excel(writer, sheet_name='Capture Ratios', index=False)
+
+            # Format sheet
+            worksheet = writer.sheets['Capture Ratios']
+
+            for cell in worksheet[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+
+            worksheet.freeze_panes = 'A2'
+
+            print(f"    ✓ Capture Ratios: {len(capture_export)} records")
+
+        # =====================================================================
+        # TAB 5: TRIGGER SUMMARY
+        # =====================================================================
+
+        if trigger_summary is not None and not trigger_summary.empty:
+            print("  Creating Trigger Summary tab...")
+
+            trigger_export = trigger_summary.copy()
+
+            # Round numeric columns
+            numeric_cols = trigger_export.select_dtypes(include=['float64']).columns
+            trigger_export[numeric_cols] = trigger_export[numeric_cols].round(4)
+
+            trigger_export.to_excel(writer, sheet_name='By Trigger', index=False)
+
+            # Format sheet
+            worksheet = writer.sheets['By Trigger']
+
+            for cell in worksheet[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+
+            worksheet.freeze_panes = 'A2'
+
+            print(f"    ✓ Trigger Summary: {len(trigger_export)} trigger types")
+
+        # =====================================================================
+        # TAB 6: SELECTION SUMMARY
+        # =====================================================================
+
+        if selection_summary is not None and not selection_summary.empty:
+            print("  Creating Selection Summary tab...")
+
+            selection_export = selection_summary.copy()
+
+            # Round numeric columns
+            numeric_cols = selection_export.select_dtypes(include=['float64']).columns
+            selection_export[numeric_cols] = selection_export[numeric_cols].round(4)
+
+            selection_export.to_excel(writer, sheet_name='By Selection', index=False)
+
+            # Format sheet
+            worksheet = writer.sheets['By Selection']
+
+            for cell in worksheet[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+
+            worksheet.freeze_panes = 'A2'
+
+            print(f"    ✓ Selection Summary: {len(selection_export)} selection algos")
+
+        # =====================================================================
+        # TAB 7+: DAILY TIME SERIES FOR EACH ITERATION
+        # =====================================================================
+
+        print("  Creating daily time series tabs...")
 
         for idx, result in enumerate(results_list, 1):
             # Create tab name
@@ -233,7 +408,27 @@ def export_consolidated_workbook(results_list, summary_df, output_dir, run_name=
 
             worksheet.freeze_panes = 'A2'
 
+            if idx % 10 == 0:
+                print(f"    Created {idx}/{len(results_list)} time series tabs...")
 
+        print(f"    ✓ Created {len(results_list)} daily time series tabs")
+
+    # Count total tabs
+    total_tabs = 2  # Summary + Trade Log
+    if regime_df is not None and not regime_df.empty:
+        total_tabs += 1
+    if capture_ratios is not None and not capture_ratios.empty:
+        total_tabs += 1
+    if trigger_summary is not None and not trigger_summary.empty:
+        total_tabs += 1
+    if selection_summary is not None and not selection_summary.empty:
+        total_tabs += 1
+    total_tabs += len(results_list)
+
+    print(f"\n✅ Consolidated workbook created: {filename}")
+    print(f"   Location: {filepath}")
+    print(f"   Total tabs: {total_tabs}")
+    print(f"{'=' * 80}\n")
 
     return filepath
 

@@ -350,38 +350,28 @@ def main():
         os.makedirs(test_output_dir, exist_ok=True)
 
         # Export consolidated Excel workbook with regime data
+        # Prepare aggregated summaries if multiple combos tested
+        trigger_summary = pd.DataFrame()
+        selection_summary = pd.DataFrame()
+
+        if len(summary_df) > 1:
+            print("\nCreating aggregated summaries...")
+            trigger_summary = summarize_by_trigger_type(summary_df)
+            selection_summary = summarize_by_selection_algo(summary_df)
+            print(f"  ✓ Created trigger and selection summaries")
+
+        # Export consolidated Excel workbook with ALL data
         workbook_path = export_consolidated_workbook(
             results_list=results_list,
             summary_df=summary_df,
             output_dir=test_output_dir,
             run_name=f'{test_fund.lower()}_test',
-            df_regimes=df_regimes
+            df_regimes=df_regimes,
+            regime_df=regime_df,
+            capture_ratios=capture_ratios,
+            trigger_summary=trigger_summary,
+            selection_summary=selection_summary
         )
-
-        # Export aggregated summaries
-        if len(summary_df) > 1:
-            print("\nCreating aggregated summaries...")
-
-            trigger_summary = summarize_by_trigger_type(summary_df)
-            selection_summary = summarize_by_selection_algo(summary_df)
-
-            trigger_summary.to_csv(os.path.join(test_output_dir, 'summary_by_trigger.csv'), index=False)
-            selection_summary.to_csv(os.path.join(test_output_dir, 'summary_by_selection.csv'), index=False)
-
-            print(f"  ✓ Saved summary_by_trigger and selection.csv files")
-
-            # Export regime analysis with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-            if not regime_df.empty:
-                regime_filename = f'regime_analysis_{timestamp}.csv'
-                regime_path = os.path.join(test_output_dir, regime_filename)
-                regime_df.to_csv(regime_path, index=False)
-
-            if not capture_ratios.empty:
-                capture_filename = f'capture_ratios_{timestamp}.csv'
-                capture_path = os.path.join(test_output_dir, capture_filename)
-                capture_ratios.to_csv(capture_path, index=False)
 
     except Exception as e:
         print(f"\n❌ ERROR during analysis/export: {str(e)}")
