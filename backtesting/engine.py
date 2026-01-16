@@ -105,8 +105,6 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         # Use trading dates (not roll dates) for actual execution
         trading_dates_list = [trading_date for roll_date, trading_date in trading_date_pairs]
 
-        print(f"Using {frequency} rebalance: {len(trading_dates_list)} trading dates (T+1) in period")
-
     # Main backtest loop
     for current_date in all_dates:
         # Get current fund data
@@ -145,14 +143,68 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
             if not hold_data.empty:
                 hold_nav *= (1 + hold_data.iloc[0]['daily_return'])
 
-        # Store daily performance
+        # Store daily performance with comprehensive roll date metrics
+
+        # Current values
+        current_fund_nav = current_fund_row.get('Fund Value (USD)', None)
+        current_ref_index = current_fund_row.get('Reference Asset Value (USD)', None)
+        current_remaining_cap_pct = current_fund_row.get('Remaining Cap', None)
+        current_downside_before_buffer = current_fund_row.get('Downside Before Buffer (%)', None)
+
+        # Roll date reference values (constant throughout period)
+        roll_date = current_fund_row.get('Roll_Date', None)
+        starting_fund_nav = current_fund_row.get('Starting_Fund_Value', None)
+        starting_ref_index = current_fund_row.get('Starting_Ref_Asset_Value', None)
+        original_cap = current_fund_row.get('Original_Cap', None)
+        original_buffer = current_fund_row.get('Original_Buffer', None)
+
+        # Calculate returns from roll date
+        fund_return_from_roll = None
+        ref_index_return_from_roll = None
+
+        if starting_fund_nav and current_fund_nav:
+            fund_return_from_roll = (current_fund_nav - starting_fund_nav) / starting_fund_nav
+
+        if starting_ref_index and current_ref_index:
+            ref_index_return_from_roll = (current_ref_index - starting_ref_index) / starting_ref_index
+
         daily_performance.append({
+            # Date and identification
             'Date': current_date,
+            'Current_Fund': current_fund,
+            'Outcome_Period_ID': current_fund_row.get('Outcome_Period_ID', None),
+            'Roll_Date': roll_date,
+
+            # Strategy and benchmark NAVs (cumulative performance)
             'Strategy_NAV': strategy_nav,
             'SPY_NAV': spy_nav,
             'BUFR_NAV': bufr_nav,
             'Hold_NAV': hold_nav,
-            'Current_Fund': current_fund
+
+            # Roll date reference values (constant within period)
+            'Starting_Fund_NAV': starting_fund_nav,
+            'Starting_Ref_Index': starting_ref_index,
+            'Original_Cap': original_cap,
+            'Original_Buffer': original_buffer,
+            'Total_Outcome_Days': current_fund_row.get('Total_Outcome_Days', None),
+
+            # Current day values
+            'Current_Fund_NAV': current_fund_nav,
+            'Current_Ref_Index': current_ref_index,
+            'Current_Remaining_Cap_Pct': current_remaining_cap_pct,
+            'Remaining_Outcome_Days': current_fund_row.get('Remaining Outcome Days', None),
+
+            # Calculated returns from roll date
+            'Fund_Return_From_Roll': fund_return_from_roll,
+            'Ref_Index_Return_From_Roll': ref_index_return_from_roll,
+
+            # Cap metrics
+            'Cap_Utilization': current_fund_row.get('Cap_Utilization', None),
+            'Cap_Remaining_Pct': current_fund_row.get('Cap_Remaining_Pct', None),
+
+            # Buffer metrics
+            'Downside_Before_Buffer_Pct': current_downside_before_buffer,
+            'Starting_Downside_Before_Buffer': current_fund_row.get('Starting_Downside_Before_Buffer', None)
         })
 
         # Evaluate trigger
@@ -193,7 +245,7 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
 
                     current_fund = new_fund
                     num_trades += 1
-                    print(f"  Trade {num_trades}: {current_date.date()} | {new_fund} | {trigger_reason}")
+                    #print(f"  Trade {num_trades}: {current_date.date()} | {new_fund} | {trigger_reason}")
 
     # Calculate performance metrics
     df_perf = pd.DataFrame(daily_performance)
@@ -230,14 +282,14 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
     vs_bufr_excess = strat_total_return - bufr_total_return
     vs_hold_excess = strat_total_return - hold_total_return
 
-    print(f"\nResults Summary:")
-    print(f"  Strategy Return: {strat_total_return * 100:+.2f}%")
-    print(f"  vs SPY: {vs_spy_excess * 100:+.2f}%")
-    print(f"  vs BUFR: {vs_bufr_excess * 100:+.2f}%")
-    print(f"  vs Hold: {vs_hold_excess * 100:+.2f}%")
-    print(f"  Sharpe Ratio: {strat_sharpe:.2f}")
-    print(f"  Max Drawdown: {strat_max_dd * 100:.2f}%")
-    print(f"  Number of Trades: {num_trades}")
+    # print(f"\nResults Summary:")
+    # print(f"  Strategy Return: {strat_total_return * 100:+.2f}%")
+    # print(f"  vs SPY: {vs_spy_excess * 100:+.2f}%")
+    # print(f"  vs BUFR: {vs_bufr_excess * 100:+.2f}%")
+    # print(f"  vs Hold: {vs_hold_excess * 100:+.2f}%")
+    # print(f"  Sharpe Ratio: {strat_sharpe:.2f}")
+    # print(f"  Max Drawdown: {strat_max_dd * 100:.2f}%")
+    # print(f"  Number of Trades: {num_trades}")
 
     # Return comprehensive results
     return {
@@ -245,6 +297,7 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         'trigger_type': trigger_type,
         'trigger_params': trigger_params,
         'selection_algo': selection_func.__name__,
+        'strategy_intent': trigger_config.get('strategy_intent', 'neutral'),  # ADD THIS LINE
         'start_date': start_date,
         'end_date': end_date,
         'num_trades': num_trades,

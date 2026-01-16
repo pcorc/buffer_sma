@@ -22,8 +22,7 @@ import traceback
 # Import configuration
 from config.settings import (
     DATA_FILE, BENCHMARK_FILE, ROLL_DATES_FILE,
-    RESULTS_DIR, REGIME_DIR, TRADE_LOG_DIR,
-    SERIES, COMBO_CONFIGS,
+    RESULTS_DIR, SERIES, COMBO_CONFIGS,
     REGIME_WINDOW_MONTHS, REGIME_BULL_THRESHOLD, REGIME_BEAR_THRESHOLD
 )
 
@@ -288,8 +287,6 @@ def main():
         # Consolidate results
         summary_df = consolidate_results(results_list)
 
-        print(f"\n✅ {len(summary_df)} successful backtests completed")
-
         # =======================================================================
         # REGIME ANALYSIS
         # =======================================================================
@@ -297,9 +294,6 @@ def main():
         regime_df = analyze_by_regime(results_list, df_regimes)
         # Calculate capture ratios
         capture_ratios = calculate_capture_ratios(regime_df)
-
-        print("\nAnalyzing performance by market regime...")
-        print("-" * 80)
 
         # if not regime_df.empty:
         #     # Show regime breakdown
@@ -345,32 +339,31 @@ def main():
 
         print("\nExporting consolidated workbook...")
 
-        # Create test output directory
-        test_output_dir = os.path.join(RESULTS_DIR, f'test_{test_fund.lower()}')
-        os.makedirs(test_output_dir, exist_ok=True)
+        # Export directly to main RESULTS_DIR without fund-specific subfolder
+        # Use timestamp-based filename instead of fund name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # Export consolidated Excel workbook with regime data
         # Prepare aggregated summaries if multiple combos tested
         trigger_summary = pd.DataFrame()
         selection_summary = pd.DataFrame()
+        month_summary = pd.DataFrame()  # Not used in single fund test, but needed for export function
 
         if len(summary_df) > 1:
-            print("\nCreating aggregated summaries...")
             trigger_summary = summarize_by_trigger_type(summary_df)
             selection_summary = summarize_by_selection_algo(summary_df)
-            print(f"  ✓ Created trigger and selection summaries")
 
         # Export consolidated Excel workbook with ALL data
         workbook_path = export_consolidated_workbook(
             results_list=results_list,
             summary_df=summary_df,
-            output_dir=test_output_dir,
+            output_dir=RESULTS_DIR,
             run_name=f'{test_fund.lower()}_test',
             df_regimes=df_regimes,
             regime_df=regime_df,
             capture_ratios=capture_ratios,
             trigger_summary=trigger_summary,
-            selection_summary=selection_summary
+            selection_summary=selection_summary,
+            month_summary=month_summary  # Pass empty DataFrame
         )
 
     except Exception as e:

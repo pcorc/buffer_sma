@@ -21,12 +21,9 @@ ROLL_DATES_FILE = os.path.join(INPUT_DIR, 'roll_dates.csv')
 
 # Output subdirectories
 RESULTS_DIR = os.path.join(OUTPUT_DIR, 'backtest_results')
-REGIME_DIR = os.path.join(OUTPUT_DIR, 'regime_analysis')
-TRADE_LOG_DIR = os.path.join(OUTPUT_DIR, 'trade_logs')
 
-# Create output directories if they don't exist
-for directory in [RESULTS_DIR, REGIME_DIR, TRADE_LOG_DIR]:
-    os.makedirs(directory, exist_ok=True)
+# Create output directory if it doesn't exist
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
 # =============================================================================
 # BACKTEST PARAMETERS
@@ -67,13 +64,15 @@ COMBO_CONFIGS = [
         'trigger_type': 'rebalance_time_period',
         'trigger_params': {'frequency': 'quarterly'},
         'selection_func_name': 'select_most_recent_launch',
-        'launch_months': ['MAR', 'JUN', 'SEP', 'DEC']
+        'launch_months': ['MAR', 'JUN', 'SEP', 'DEC'],
+        'strategy_intent': 'neutral'
     },
     {
         'trigger_type': 'rebalance_time_period',
         'trigger_params': {'frequency': 'quarterly'},
         'selection_func_name': 'select_remaining_cap',
-        'launch_months': ['MAR', 'JUN', 'SEP', 'DEC']
+        'launch_months': ['MAR', 'JUN', 'SEP', 'DEC'],
+        'strategy_intent': 'bullish'
     },
     {
         'trigger_type': 'rebalance_time_period',

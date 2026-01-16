@@ -35,6 +35,7 @@ def consolidate_results(results_list):
             'trigger_type': result['trigger_type'],
             'trigger_params': trigger_params_str,
             'selection_algo': result['selection_algo'],
+            'strategy_intent': result.get('strategy_intent', 'neutral'),
             'start_date': result['start_date'],
             'end_date': result['end_date'],
             'num_trades': result['num_trades'],
@@ -178,3 +179,97 @@ def summarize_by_selection_algo(summary_df):
     selection_summary = selection_summary.reset_index()
 
     return selection_summary
+
+
+def summarize_by_strategy_intent(summary_df):
+    """
+    Aggregate performance by strategy intent (bullish/bearish/neutral).
+
+    Parameters:
+      summary_df: Consolidated results DataFrame
+
+    Returns:
+      DataFrame with performance metrics by strategy intent
+    """
+    if summary_df.empty:
+        return pd.DataFrame()
+
+    intent_summary = summary_df.groupby('strategy_intent').agg({
+        'vs_bufr_excess': ['mean', 'median', 'max', 'min'],
+        'strategy_sharpe': 'mean',
+        'num_trades': 'mean',
+        'strategy_return': 'mean'
+    }).round(4)
+
+    intent_summary.columns = ['_'.join(col).strip() for col in intent_summary.columns.values]
+    intent_summary = intent_summary.reset_index()
+
+    return intent_summary
+
+
+def summarize_by_intent_and_regime(summary_df, regime_df):
+    """
+    Aggregate performance by strategy intent AND market regime.
+
+    This shows whether strategies perform as intended:
+    - Do bearish strategies protect in bear markets?
+    - Do bullish strategies capture upside in bull markets?
+    - Are neutral strategies consistent across regimes?
+
+    Parameters:
+      summary_df: Consolidated results DataFrame
+      regime_df: Regime-specific analysis DataFrame
+
+    Returns:
+      DataFrame with performance metrics by intent × regime
+    """
+    if summary_df.empty or regime_df.empty:
+        return pd.DataFrame()
+
+    # Merge to get strategy_intent into regime_df
+    regime_with_intent = regime_df.merge(
+        summary_df[['launch_month', 'trigger_type', 'selection_algo', 'strategy_intent']],
+        on=['launch_month', 'trigger_type', 'selection_algo'],
+        how='left'
+    )
+
+    # Aggregate by intent × regime
+    intent_regime_summary = regime_with_intent.groupby(['strategy_intent', 'regime']).agg({
+        'strategy_return': ['mean', 'median'],
+        'vs_bufr_excess': ['mean', 'median'],
+        'vs_spy_excess': ['mean', 'median'],
+        'num_trades': 'sum',
+        'days_in_regime': 'sum'
+    }).round(4)
+
+    intent_regime_summary.columns = ['_'.join(col).strip() for col in intent_regime_summary.columns.values]
+    intent_regime_summary = intent_regime_summary.reset_index()
+
+    return intent_regime_summary
+
+
+def summarize_by_month_and_regime(summary_df, regime_df):
+    """
+    Aggregate performance by launch month AND market regime.
+
+    Parameters:
+      summary_df: Consolidated results DataFrame
+      regime_df: Regime-specific analysis DataFrame
+
+    Returns:
+      DataFrame with performance metrics by month × regime
+    """
+    if summary_df.empty or regime_df.empty:
+        return pd.DataFrame()
+
+    month_regime_summary = regime_df.groupby(['launch_month', 'regime']).agg({
+        'strategy_return': ['mean', 'median', 'count'],
+        'vs_bufr_excess': ['mean', 'median'],
+        'vs_spy_excess': ['mean', 'median'],
+        'num_trades': 'sum'
+    }).round(4)
+
+    month_regime_summary.columns = ['_'.join(col).strip() for col in month_regime_summary.columns.values]
+    month_regime_summary = month_regime_summary.reset_index()
+
+    return month_regime_summary

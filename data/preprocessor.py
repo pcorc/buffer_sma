@@ -100,9 +100,12 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
 
     # Initialize new columns
     new_columns = [
-        'Roll_Date', 'Outcome_Period_ID', 'Original_Cap', 'Starting_Fund_Value',
-        'Fund_Cap_Value', 'Starting_Ref_Asset_Value', 'Ref_Asset_Cap_Value',
-        'Buffer_Level', 'Cap_Utilization', 'Cap_Remaining_Pct'
+        'Roll_Date', 'Outcome_Period_ID',
+        'Original_Cap', 'Original_Buffer',
+        'Starting_Fund_Value', 'Fund_Cap_Value',
+        'Starting_Ref_Asset_Value', 'Ref_Asset_Cap_Value',
+        'Buffer_Level', 'Total_Outcome_Days', 'Starting_Downside_Before_Buffer',
+        'Cap_Utilization', 'Cap_Remaining_Pct'
     ]
 
     for col in new_columns:
@@ -165,14 +168,27 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
             start_row = fund_df.loc[closest_idx]
             actual_roll_date = start_row['Date']
 
-            # Capture initial metrics from roll date
-            original_cap = start_row['Remaining Cap'] / 100
-            starting_fund_value = start_row['Fund Value (USD)']
-            fund_cap_value = starting_fund_value * (1 + original_cap)
-            starting_ref_asset_value = start_row['Reference Asset Value (USD)']
+            # Capture initial metrics from roll date - THESE ARE THE REFERENCE VALUES
+            # These stay constant throughout the outcome period for accurate return calculations
 
+            # Cap metrics
+            original_cap = start_row['Remaining Cap'] / 100
+            original_buffer = start_row.get('Remaining Buffer (%)', buffer_level * 100) / 100
+
+            # NAV metrics at roll date
+            starting_fund_value = start_row['Fund Value (USD)']  # NAV per share at roll
+            fund_cap_value = starting_fund_value * (1 + original_cap)
+
+            # Reference Index metrics at roll date
+            starting_ref_asset_value = start_row['Reference Asset Value (USD)']
             ref_asset_return_to_cap = start_row['Reference Asset Return to Realize Cap (%)'] / 100
             ref_asset_cap_value = starting_ref_asset_value * (1 + ref_asset_return_to_cap)
+
+            # Outcome period metadata
+            total_outcome_days = start_row.get('Remaining Outcome Days', 365)
+
+            # Downside before buffer at roll date
+            starting_downside_before_buffer = start_row.get('Downside Before Buffer (%)', 0) / 100
 
             # Determine end of this period
             if period_idx < len(roll_dates_for_fund) - 1:
@@ -194,15 +210,18 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
                         print(f"  ⚠️  {fund} Period {period_id}: Original_Cap variation detected: {max_variation:.2%}")
                         funds_with_warnings.append(fund)
 
-            # Assign metrics to entire period
-            df.loc[period_indices, 'Roll_Date'] = actual_roll_date
-            df.loc[period_indices, 'Outcome_Period_ID'] = f"{fund}_P{period_id}"
-            df.loc[period_indices, 'Original_Cap'] = original_cap
-            df.loc[period_indices, 'Starting_Fund_Value'] = starting_fund_value
-            df.loc[period_indices, 'Fund_Cap_Value'] = fund_cap_value
-            df.loc[period_indices, 'Starting_Ref_Asset_Value'] = starting_ref_asset_value
-            df.loc[period_indices, 'Ref_Asset_Cap_Value'] = ref_asset_cap_value
-            df.loc[period_indices, 'Buffer_Level'] = buffer_level
+                # Assign metrics to entire period
+                df.loc[period_indices, 'Roll_Date'] = actual_roll_date
+                df.loc[period_indices, 'Outcome_Period_ID'] = f"{fund}_P{period_id}"
+                df.loc[period_indices, 'Original_Cap'] = original_cap
+                df.loc[period_indices, 'Original_Buffer'] = original_buffer
+                df.loc[period_indices, 'Starting_Fund_Value'] = starting_fund_value
+                df.loc[period_indices, 'Fund_Cap_Value'] = fund_cap_value
+                df.loc[period_indices, 'Starting_Ref_Asset_Value'] = starting_ref_asset_value
+                df.loc[period_indices, 'Ref_Asset_Cap_Value'] = ref_asset_cap_value
+                df.loc[period_indices, 'Buffer_Level'] = buffer_level
+                df.loc[period_indices, 'Total_Outcome_Days'] = total_outcome_days
+                df.loc[period_indices, 'Starting_Downside_Before_Buffer'] = starting_downside_before_buffer
 
         funds_processed += 1
 

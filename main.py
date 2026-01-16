@@ -25,7 +25,7 @@ sys.path.insert(0, project_root)
 # Import configuration
 from config.settings import (
     DATA_FILE, BENCHMARK_FILE, ROLL_DATES_FILE,
-    RESULTS_DIR, REGIME_DIR, TRADE_LOG_DIR,
+    RESULTS_DIR,
     SERIES, LAUNCH_MONTHS, COMBO_CONFIGS,
     REGIME_WINDOW_MONTHS, REGIME_BULL_THRESHOLD, REGIME_BEAR_THRESHOLD
 )
@@ -56,10 +56,7 @@ from analysis.regime_analyzer import (
 )
 
 # Import utilities
-from utils.exporters import (
-    export_results, export_trade_logs, export_daily_performance,
-    export_summary_stats, display_top_performers
-)
+from utils.excel_exporter import export_main_consolidated_workbook
 from utils.validators import (
     validate_fund_data, validate_benchmark_data,
     validate_roll_dates, print_validation_results
@@ -151,6 +148,9 @@ def main():
     # STEP 5: PREPARE TRIGGER/SELECTION COMBINATIONS
     # =========================================================================
 
+    print("\nSTEP 5: Preparing trigger/selection combinations...")
+    print("-" * 80)
+
     # Convert config format to execution format
     trigger_selection_combos = []
     for config in COMBO_CONFIGS:
@@ -158,7 +158,8 @@ def main():
             'trigger_type': config['trigger_type'],
             'trigger_params': config['trigger_params'],
             'selection_func_name': config['selection_func_name'],
-            'launch_months': config.get('launch_months', LAUNCH_MONTHS)
+            'launch_months': config.get('launch_months', LAUNCH_MONTHS),
+            'strategy_intent': config.get('strategy_intent', 'neutral')  # Capture strategy intent
         }
         trigger_selection_combos.append(combo)
 
@@ -246,34 +247,43 @@ def main():
     # STEP 9: EXPORT RESULTS
     # =========================================================================
 
-    print("\nSTEP 9: Exporting results...")
+    # =========================================================================
+    # STEP 9: EXPORT CONSOLIDATED WORKBOOK
+    # =========================================================================
+
+    print("\nSTEP 9: Exporting consolidated workbook...")
     print("-" * 80)
 
     try:
-        # Export main results
-        summary_path, regime_path = export_results(summary_df, regime_df, RESULTS_DIR)
+        # Create aggregated summaries
+        month_summary = summarize_by_launch_month(summary_df)
+        trigger_summary = summarize_by_trigger_type(summary_df)
+        selection_summary = summarize_by_selection_algo(summary_df)
 
-        # Export additional summaries
-        month_summary.to_csv(os.path.join(RESULTS_DIR, 'summary_by_month.csv'), index=False)
-        trigger_summary.to_csv(os.path.join(RESULTS_DIR, 'summary_by_trigger.csv'), index=False)
-        selection_summary.to_csv(os.path.join(RESULTS_DIR, 'summary_by_selection.csv'), index=False)
+        # Generate timestamp for filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        if not capture_ratios.empty:
-            capture_ratios.to_csv(os.path.join(REGIME_DIR, 'capture_ratios.csv'), index=False)
+        # Export everything to single consolidated workbook
+        workbook_path = export_main_consolidated_workbook(
+            results_list=results_list,
+            summary_df=summary_df,
+            output_dir=RESULTS_DIR,
+            run_name='mainpy_consolidated',
+            df_regimes=df_regimes,
+            regime_df=regime_df,
+            capture_ratios=capture_ratios,
+            trigger_summary=trigger_summary,
+            selection_summary=selection_summary,
+            month_summary=month_summary
+        )
 
-        export_trade_logs(results_list, TRADE_LOG_DIR)
-        export_summary_stats(summary_df, regime_df, RESULTS_DIR)
+        print(f"\n✅ Consolidated workbook exported:")
+        print(f"   {workbook_path}")
 
     except Exception as e:
         print(f"\n❌ ERROR during export: {str(e)}")
         import traceback
         traceback.print_exc()
-
-    # =========================================================================
-    # STEP 10: DISPLAY TOP PERFORMERS
-    # =========================================================================
-
-    display_top_performers(summary_df, n=10)
 
     # =========================================================================
     # COMPLETION

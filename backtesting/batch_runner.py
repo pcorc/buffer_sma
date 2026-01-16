@@ -67,7 +67,8 @@ def run_all_single_ticker_tests(df_enriched, df_benchmarks, roll_dates_dict,
                     launch_month=launch_month,
                     trigger_config={
                         'type': combo['trigger_type'],
-                        'params': combo['trigger_params']
+                        'params': combo['trigger_params'],
+                        'strategy_intent': combo['strategy_intent']  # ADD THIS LINE
                     },
                     selection_func=selection_func,
                     roll_dates_dict=roll_dates_dict,
