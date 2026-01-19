@@ -51,15 +51,14 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
     """
     Enrich raw fund data with derived metrics for each outcome period.
 
-    Uses monthly roll dates to identify each fund's anniversary dates and capture
-    initial metrics (Original_Cap, etc.) at the start of each outcome period.
+    Uses explicit roll dates from roll_dates.csv with STRICT matching - no inference.
+    Captures initial cap values on each annual roll date for 12-month outcome periods.
 
     Key improvements:
-    - Uses actual roll dates from roll_dates.csv to identify period starts
-    - Matches each fund to its anniversary month roll dates
-    - Handles initial fund launches (Nov 2019 for FAUG/FNOV, May 2020+)
-    - Validates data availability on roll dates
-    - Checks for unexpected variation in Original_Cap within periods
+    - Uses exact roll dates only - no "closest date" logic
+    - Validates cap values are in reasonable range (10-25%)
+    - Special handling for FAUG (starts Aug 2020, not Nov 2019)
+    - Skips future roll dates beyond available data
 
     Parameters:
       df_raw: Raw fund DataFrame
@@ -78,9 +77,9 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
         - Cap_Utilization: Daily calculation of cap used (0 to 1)
         - Cap_Remaining_Pct: Daily calculation of remaining cap (0 to 1)
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("PREPROCESSING FUND DATA")
-    print("="*80)
+    print("=" * 80)
 
     df = df_raw.copy()
     df['Date'] = pd.to_datetime(df['Date'])
@@ -96,7 +95,7 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
     if not monthly_roll_dates:
         raise ValueError("No monthly roll dates found in roll_dates_dict")
 
-    # print(f"Using {len(monthly_roll_dates)} monthly roll dates from {monthly_roll_dates[0].strftime('%Y-%m-%d')} to {monthly_roll_dates[-1].strftime('%Y-%m-%d')}")
+    print(f"Using {len(monthly_roll_dates)} monthly roll dates from {monthly_roll_dates[0].strftime('%Y-%m-%d')} to {monthly_roll_dates[-1].strftime('%Y-%m-%d')}")
 
     # Initialize new columns
     new_columns = [
@@ -116,9 +115,12 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
         else:
             df[col] = np.nan
 
+    # Collect all errors before raising
+    missing_date_errors = []
+    cap_warnings = []
+
     # Process each fund separately
     funds_processed = 0
-    funds_with_warnings = []
 
     for fund in df['Fund'].unique():
         fund_mask = df['Fund'] == fund
@@ -131,6 +133,7 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
 
         # Get fund's first date (launch date)
         launch_date = fund_df['Date'].min()
+        fund_end_date = fund_df['Date'].max()
 
         # Get anniversary roll dates for this fund
         try:
@@ -139,46 +142,60 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
             print(f"  ⚠️  Skipping fund {fund}: {e}")
             continue
 
+        # Special handling for FAUG - start in August 2020, not Nov 2019
+        if fund == 'FAUG':
+            print(f"  ℹ️  {fund}: Applying special start date (Aug 2020 instead of Nov 2019)")
+            anniversary_dates = [d for d in anniversary_dates if d >= pd.Timestamp('2020-08-01')]
+
         # Filter anniversary dates to those >= launch_date
         anniversary_dates = [d for d in anniversary_dates if d >= launch_date]
 
-        # Add launch date as first "roll date" if it's not already an anniversary
-        if not anniversary_dates or launch_date < anniversary_dates[0]:
+        # For first period: use launch date if before first anniversary (except FAUG)
+        if fund != 'FAUG' and (not anniversary_dates or launch_date < anniversary_dates[0]):
             roll_dates_for_fund = [launch_date] + anniversary_dates
-            used_launch_as_first = True
         else:
             roll_dates_for_fund = anniversary_dates
-            used_launch_as_first = False
 
-        # Process each outcome period
+        # Process each outcome period with STRICT date matching
         for period_idx, roll_date in enumerate(roll_dates_for_fund):
             period_id = period_idx + 1
 
-            # Find the row closest to roll_date (should be exact match or very close)
-            date_diffs = abs(fund_df['Date'] - roll_date)
-            closest_idx = date_diffs.idxmin()
-            min_diff_days = date_diffs.loc[closest_idx].days
+            # Skip roll dates beyond available data range (future dates)
+            if roll_date > fund_end_date:
+                continue  # Silently skip future dates
 
-            if min_diff_days > 5:
-                warning_msg = f"{fund} Period {period_id}: No data on roll date {roll_date.strftime('%Y-%m-%d')}, closest is {fund_df.loc[closest_idx, 'Date'].strftime('%Y-%m-%d')} ({min_diff_days} days away)"
-                if fund not in funds_with_warnings:
-                    print(f"  ⚠️  {warning_msg}")
-                    funds_with_warnings.append(fund)
+            # STRICT MATCHING: Look for exact date only
+            exact_match = fund_df[fund_df['Date'] == roll_date]
 
-            start_row = fund_df.loc[closest_idx]
+            if exact_match.empty:
+                error_msg = (
+                    f"{fund} | Period {period_id} | Roll Date: {roll_date.strftime('%Y-%m-%d')} | "
+                    f"Fund date range: {launch_date.strftime('%Y-%m-%d')} to {fund_end_date.strftime('%Y-%m-%d')}"
+                )
+                missing_date_errors.append(error_msg)
+                continue  # Continue checking other periods/funds
+
+            start_row = exact_match.iloc[0]
             actual_roll_date = start_row['Date']
 
-            # Capture initial metrics from roll date - THESE ARE THE REFERENCE VALUES
-            # These stay constant throughout the outcome period for accurate return calculations
-            # Cap metrics
-            if actual_roll_date.strftime('%Y-%m-%d') == '2024-09-20':
-                x=1
-
+            # Capture initial metrics from roll date - use 'Remaining Cap' directly
             original_cap = start_row['Remaining Cap'] / 100
-            original_buffer = start_row.get('Remaining Buffer (%)', buffer_level * 100) / 100
+            original_buffer = start_row.get('Remaining Buffer', buffer_level * 100) / 100
+
+            # VALIDATION: Check cap is in reasonable range
+            if original_cap < 0.10:
+                cap_warnings.append(
+                    f"{fund} | Period {period_id} | Roll Date: {roll_date.strftime('%Y-%m-%d')} | "
+                    f"Cap BELOW 10%: {original_cap:.2%}"
+                )
+            elif original_cap > 0.30:
+                cap_warnings.append(
+                    f"{fund} | Period {period_id} | Roll Date: {roll_date.strftime('%Y-%m-%d')} | "
+                    f"Cap ABOVE 30%: {original_cap:.2%}"
+                )
 
             # NAV metrics at roll date
-            starting_fund_value = start_row['Fund Value (USD)']  # NAV per share at roll
+            starting_fund_value = start_row['Fund Value (USD)']
             fund_cap_value = starting_fund_value * (1 + original_cap)
 
             # Reference Index metrics at roll date
@@ -202,17 +219,8 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
 
             period_indices = fund_df[period_mask].index
 
-            # Validation: Check if Original_Cap varies significantly within period
+            # Assign metrics to entire period (no variation check needed)
             if len(period_indices) > 0:
-                period_remaining_caps = fund_df.loc[period_indices, 'Remaining Cap'] / 100
-                max_variation = abs(period_remaining_caps.max() - original_cap)
-
-                if max_variation > 0.02:  # More than 2% variation from original
-                    if fund not in funds_with_warnings:
-                        print(f"  ⚠️  {fund} Period {period_id}: Original_Cap variation detected: {max_variation:.2%}")
-                        funds_with_warnings.append(fund)
-
-                # Assign metrics to entire period
                 df.loc[period_indices, 'Roll_Date'] = actual_roll_date
                 df.loc[period_indices, 'Outcome_Period_ID'] = f"{fund}_P{period_id}"
                 df.loc[period_indices, 'Original_Cap'] = original_cap
@@ -234,10 +242,25 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
     df['Cap_Remaining_Pct'] = df['Current_Remaining_Cap'] / df['Original_Cap']
     df['Cap_Remaining_Pct'] = df['Cap_Remaining_Pct'].fillna(1).clip(lower=0, upper=1)
 
-    print(f"\n✅ Preprocessing complete- processed {funds_processed} funds")
+    # Print all warnings
+    if cap_warnings:
+        print(f"\n⚠️  CAP RANGE WARNINGS ({len(cap_warnings)} found):")
+        for warning in cap_warnings:
+            print(f"  • {warning}")
+
+    # Raise all missing date errors at once
+    if missing_date_errors:
+        print(f"\n❌ FATAL ERRORS ({len(missing_date_errors)} missing roll dates):")
+        for error in missing_date_errors:
+            print(f"  • {error}")
+        print("=" * 80)
+        raise ValueError(
+            f"Preprocessing failed: {len(missing_date_errors)} roll dates not found in data. "
+            f"See details above."
+        )
+
+    print(f"\n✅ Preprocessing complete - processed {funds_processed} funds")
     print(f"  Created {df['Outcome_Period_ID'].nunique()} outcome periods")
-    if funds_with_warnings:
-        print(f"  ⚠️  {len(funds_with_warnings)} funds had warnings")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
     return df

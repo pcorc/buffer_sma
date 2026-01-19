@@ -6,23 +6,6 @@ import pandas as pd
 import numpy as np
 
 
-# Selection registry for dynamic lookup
-SELECTION_REGISTRY = {
-    'select_most_recent_launch': select_most_recent_launch,
-    'select_remaining_cap': select_remaining_cap,  # LEGACY - keep for backwards compatibility
-    'select_remaining_cap_highest': select_remaining_cap_highest,  # NEW
-    'select_remaining_cap_lowest': select_remaining_cap_lowest,  # NEW
-    'select_cap_utilization': select_cap_utilization,  # LEGACY - keep for backwards compatibility
-    'select_cap_utilization_lowest': select_cap_utilization_lowest,  # NEW
-    'select_cap_utilization_highest': select_cap_utilization_highest,  # NEW
-    'select_downside_buffer_highest': select_downside_buffer_highest,  # NEW
-    'select_downside_buffer_lowest': select_downside_buffer_lowest,  # NEW
-    'select_highest_outcome_and_cap': select_highest_outcome_and_cap,
-    'select_cost_analysis': select_cost_analysis
-}
-
-
-
 def select_most_recent_launch(df_universe, current_date, series='F'):
     """
     Select the fund with the most recent roll date.
@@ -47,9 +30,12 @@ def select_most_recent_launch(df_universe, current_date, series='F'):
     return valid_funds.loc[most_recent_idx, 'Fund']
 
 
-def select_remaining_cap(df_universe, current_date, series='F'):
+def select_remaining_cap_highest(df_universe, current_date, series='F'):
     """
-    Select the fund with the highest remaining cap.
+    Select the fund with the HIGHEST remaining cap (bullish).
+
+    Seeks maximum upside potential by choosing funds with the most cap remaining.
+    If multiple funds have the same cap, selects the most recent launch.
 
     Parameters:
       df_universe: DataFrame with all funds on current date
@@ -57,18 +43,30 @@ def select_remaining_cap(df_universe, current_date, series='F'):
       series: Fund series
 
     Returns:
-      String: Fund ticker
+      String: Fund ticker with highest remaining cap
     """
     if df_universe.empty:
         return None
 
-    max_cap_idx = df_universe['Remaining Cap'].idxmax()
-    return df_universe.loc[max_cap_idx, 'Fund']
+    # Find maximum remaining cap
+    max_cap = df_universe['Remaining Cap'].max()
+
+    # Filter to funds with max cap
+    max_cap_funds = df_universe[df_universe['Remaining Cap'] == max_cap].copy()
+
+    # If tie, use most recent launch as tiebreaker
+    if len(max_cap_funds) > 1:
+        return select_most_recent_launch(max_cap_funds, current_date, series)
+
+    return max_cap_funds.iloc[0]['Fund']
 
 
-def select_cap_utilization(df_universe, current_date, series='F'):
+def select_remaining_cap_lowest(df_universe, current_date, series='F'):
     """
-    Select the fund with the lowest cap utilization.
+    Select the fund with the LOWEST remaining cap (bearish/conservative).
+
+    Chooses funds with caps nearly exhausted - more conservative positioning.
+    If multiple funds have the same cap, selects the most recent launch.
 
     Parameters:
       df_universe: DataFrame with all funds on current date
@@ -76,18 +74,197 @@ def select_cap_utilization(df_universe, current_date, series='F'):
       series: Fund series
 
     Returns:
-      String: Fund ticker
+      String: Fund ticker with lowest remaining cap
     """
     if df_universe.empty:
         return None
 
-    min_util_idx = df_universe['Cap_Utilization'].idxmin()
-    return df_universe.loc[min_util_idx, 'Fund']
+    # Find minimum remaining cap
+    min_cap = df_universe['Remaining Cap'].min()
+
+    # Filter to funds with min cap
+    min_cap_funds = df_universe[df_universe['Remaining Cap'] == min_cap].copy()
+
+    # If tie, use most recent launch as tiebreaker
+    if len(min_cap_funds) > 1:
+        return select_most_recent_launch(min_cap_funds, current_date, series)
+
+    return min_cap_funds.iloc[0]['Fund']
+
+
+def select_downside_buffer_highest(df_universe, current_date, series='F'):
+    """
+    Select the fund with the HIGHEST downside before buffer (bullish).
+
+    Chooses funds with the most cushion before hitting buffer zone.
+    Higher downside % means more room to fall = more aggressive positioning.
+    If multiple funds have the same downside, selects the most recent launch.
+
+    Parameters:
+      df_universe: DataFrame with all funds on current date
+      current_date: Current date
+      series: Fund series
+
+    Returns:
+      String: Fund ticker with highest downside before buffer
+    """
+    if df_universe.empty:
+        return None
+
+    downside_col = 'Downside Before Buffer (%)'
+
+    if downside_col not in df_universe.columns:
+        return df_universe.iloc[0]['Fund']
+
+    # Filter out any null values
+    valid_funds = df_universe[df_universe[downside_col].notna()].copy()
+
+    if valid_funds.empty:
+        return df_universe.iloc[0]['Fund']
+
+    # Find maximum downside
+    max_downside = valid_funds[downside_col].max()
+
+    # Filter to funds with max downside
+    max_downside_funds = valid_funds[valid_funds[downside_col] == max_downside].copy()
+
+    # If tie, use most recent launch as tiebreaker
+    if len(max_downside_funds) > 1:
+        return select_most_recent_launch(max_downside_funds, current_date, series)
+
+    return max_downside_funds.iloc[0]['Fund']
+
+
+def select_downside_buffer_lowest(df_universe, current_date, series='F'):
+    """
+    Select the fund with the LOWEST downside before buffer (bearish/defensive).
+
+    Chooses funds closest to or in the buffer zone - maximum downside protection.
+    Lower downside % means closer to buffer = more defensive positioning.
+    If multiple funds have the same downside, selects the most recent launch.
+
+    Parameters:
+      df_universe: DataFrame with all funds on current date
+      current_date: Current date
+      series: Fund series
+
+    Returns:
+      String: Fund ticker with lowest downside before buffer
+    """
+    if df_universe.empty:
+        return None
+
+    downside_col = 'Downside Before Buffer (%)'
+
+    if downside_col not in df_universe.columns:
+        return df_universe.iloc[0]['Fund']
+
+    # Filter out any null values
+    valid_funds = df_universe[df_universe[downside_col].notna()].copy()
+
+    if valid_funds.empty:
+        return df_universe.iloc[0]['Fund']
+
+    # Find minimum downside
+    min_downside = valid_funds[downside_col].min()
+
+    # Filter to funds with min downside
+    min_downside_funds = valid_funds[valid_funds[downside_col] == min_downside].copy()
+
+    # If tie, use most recent launch as tiebreaker
+    if len(min_downside_funds) > 1:
+        return select_most_recent_launch(min_downside_funds, current_date, series)
+
+    return min_downside_funds.iloc[0]['Fund']
+
+
+def select_cap_utilization_lowest(df_universe, current_date, series='F'):
+    """
+    Select the fund with the LOWEST cap utilization (bullish).
+
+    Low cap utilization = most cap remaining = maximum upside potential.
+    Example: 25% utilization means 75% of cap is still available.
+    If multiple funds have the same utilization, selects the most recent launch.
+
+    Parameters:
+      df_universe: DataFrame with all funds on current date
+      current_date: Current date
+      series: Fund series
+
+    Returns:
+      String: Fund ticker with lowest cap utilization
+    """
+    if df_universe.empty:
+        return None
+
+    if 'Cap_Utilization' not in df_universe.columns:
+        return df_universe.iloc[0]['Fund']
+
+    # Filter out any null values
+    valid_funds = df_universe[df_universe['Cap_Utilization'].notna()].copy()
+
+    if valid_funds.empty:
+        return df_universe.iloc[0]['Fund']
+
+    # Find minimum utilization
+    min_util = valid_funds['Cap_Utilization'].min()
+
+    # Filter to funds with min utilization
+    min_util_funds = valid_funds[valid_funds['Cap_Utilization'] == min_util].copy()
+
+    # If tie, use most recent launch as tiebreaker
+    if len(min_util_funds) > 1:
+        return select_most_recent_launch(min_util_funds, current_date, series)
+
+    return min_util_funds.iloc[0]['Fund']
+
+
+def select_cap_utilization_highest(df_universe, current_date, series='F'):
+    """
+    Select the fund with the HIGHEST cap utilization (bearish/conservative).
+
+    High cap utilization = little cap remaining = conservative positioning.
+    Example: 85% utilization means only 15% of cap is available.
+    If multiple funds have the same utilization, selects the most recent launch.
+
+    Parameters:
+      df_universe: DataFrame with all funds on current date
+      current_date: Current date
+      series: Fund series
+
+    Returns:
+      String: Fund ticker with highest cap utilization
+    """
+    if df_universe.empty:
+        return None
+
+    if 'Cap_Utilization' not in df_universe.columns:
+        return df_universe.iloc[0]['Fund']
+
+    # Filter out any null values
+    valid_funds = df_universe[df_universe['Cap_Utilization'].notna()].copy()
+
+    if valid_funds.empty:
+        return df_universe.iloc[0]['Fund']
+
+    # Find maximum utilization
+    max_util = valid_funds['Cap_Utilization'].max()
+
+    # Filter to funds with max utilization
+    max_util_funds = valid_funds[valid_funds['Cap_Utilization'] == max_util].copy()
+
+    # If tie, use most recent launch as tiebreaker
+    if len(max_util_funds) > 1:
+        return select_most_recent_launch(max_util_funds, current_date, series)
+
+    return max_util_funds.iloc[0]['Fund']
 
 
 def select_highest_outcome_and_cap(df_universe, current_date, series='F'):
     """
     Select fund with highest combined Remaining Outcome Days + Remaining Cap.
+
+    If multiple funds have the same score, selects the most recent launch.
 
     Parameters:
       df_universe: DataFrame with all funds on current date
@@ -106,13 +283,24 @@ def select_highest_outcome_and_cap(df_universe, current_date, series='F'):
             df_universe['Remaining Cap']
     )
 
-    max_score_idx = df_universe['Combined_Score'].idxmax()
-    return df_universe.loc[max_score_idx, 'Fund']
+    # Find maximum score
+    max_score = df_universe['Combined_Score'].max()
+
+    # Filter to funds with max score
+    max_score_funds = df_universe[df_universe['Combined_Score'] == max_score].copy()
+
+    # If tie, use most recent launch as tiebreaker
+    if len(max_score_funds) > 1:
+        return select_most_recent_launch(max_score_funds, current_date, series)
+
+    return max_score_funds.iloc[0]['Fund']
 
 
 def select_cost_analysis(df_universe, current_date, series='F'):
     """
     Select fund with lowest cost per day of protection.
+
+    If multiple funds have the same cost, selects the most recent launch.
 
     Parameters:
       df_universe: DataFrame with all funds on current date
@@ -141,8 +329,31 @@ def select_cost_analysis(df_universe, current_date, series='F'):
              (df_universe.loc[valid_mask, 'Remaining Outcome Days'] / 365))
     )
 
-    min_cost_idx = df_universe['Cost_Per_Day'].idxmin()
-    return df_universe.loc[min_cost_idx, 'Fund']
+    # Find minimum cost
+    min_cost = df_universe['Cost_Per_Day'].min()
+
+    # Filter to funds with min cost
+    min_cost_funds = df_universe[df_universe['Cost_Per_Day'] == min_cost].copy()
+
+    # If tie, use most recent launch as tiebreaker
+    if len(min_cost_funds) > 1:
+        return select_most_recent_launch(min_cost_funds, current_date, series)
+
+    return min_cost_funds.iloc[0]['Fund']
+
+
+# Selection registry for dynamic lookup
+SELECTION_REGISTRY = {
+    'select_most_recent_launch': select_most_recent_launch,
+    'select_remaining_cap_highest': select_remaining_cap_highest,
+    'select_remaining_cap_lowest': select_remaining_cap_lowest,
+    'select_cap_utilization_lowest': select_cap_utilization_lowest,
+    'select_cap_utilization_highest': select_cap_utilization_highest,
+    'select_downside_buffer_highest': select_downside_buffer_highest,
+    'select_downside_buffer_lowest': select_downside_buffer_lowest,
+    'select_highest_outcome_and_cap': select_highest_outcome_and_cap,
+    'select_cost_analysis': select_cost_analysis
+}
 
 
 def get_selection_function(selection_name):
