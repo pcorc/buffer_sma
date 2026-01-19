@@ -170,8 +170,10 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
 
             # Capture initial metrics from roll date - THESE ARE THE REFERENCE VALUES
             # These stay constant throughout the outcome period for accurate return calculations
-
             # Cap metrics
+            if actual_roll_date.strftime('%Y-%m-%d') == '2024-09-20':
+                x=1
+
             original_cap = start_row['Remaining Cap'] / 100
             original_buffer = start_row.get('Remaining Buffer (%)', buffer_level * 100) / 100
 

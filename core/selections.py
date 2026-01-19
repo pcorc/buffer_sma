@@ -6,6 +6,23 @@ import pandas as pd
 import numpy as np
 
 
+# Selection registry for dynamic lookup
+SELECTION_REGISTRY = {
+    'select_most_recent_launch': select_most_recent_launch,
+    'select_remaining_cap': select_remaining_cap,  # LEGACY - keep for backwards compatibility
+    'select_remaining_cap_highest': select_remaining_cap_highest,  # NEW
+    'select_remaining_cap_lowest': select_remaining_cap_lowest,  # NEW
+    'select_cap_utilization': select_cap_utilization,  # LEGACY - keep for backwards compatibility
+    'select_cap_utilization_lowest': select_cap_utilization_lowest,  # NEW
+    'select_cap_utilization_highest': select_cap_utilization_highest,  # NEW
+    'select_downside_buffer_highest': select_downside_buffer_highest,  # NEW
+    'select_downside_buffer_lowest': select_downside_buffer_lowest,  # NEW
+    'select_highest_outcome_and_cap': select_highest_outcome_and_cap,
+    'select_cost_analysis': select_cost_analysis
+}
+
+
+
 def select_most_recent_launch(df_universe, current_date, series='F'):
     """
     Select the fund with the most recent roll date.
@@ -126,16 +143,6 @@ def select_cost_analysis(df_universe, current_date, series='F'):
 
     min_cost_idx = df_universe['Cost_Per_Day'].idxmin()
     return df_universe.loc[min_cost_idx, 'Fund']
-
-
-# Selection registry for dynamic lookup
-SELECTION_REGISTRY = {
-    'select_most_recent_launch': select_most_recent_launch,
-    'select_remaining_cap': select_remaining_cap,
-    'select_cap_utilization': select_cap_utilization,
-    'select_highest_outcome_and_cap': select_highest_outcome_and_cap,
-    'select_cost_analysis': select_cost_analysis
-}
 
 
 def get_selection_function(selection_name):

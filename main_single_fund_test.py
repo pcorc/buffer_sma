@@ -188,6 +188,34 @@ def main():
         'Cap_Utilization', 'Cap_Remaining_Pct', 'Outcome_Period_ID'
     ]
 
+    # DIAGNOSTIC: Check specific roll dates
+    print("\n" + "=" * 80)
+    print("DIAGNOSTIC: Checking specific roll dates")
+    print("=" * 80)
+
+    test_dates = ['2024-06-21', '2024-09-20']
+
+    for test_date_str in test_dates:
+        test_date = pd.to_datetime(test_date_str)
+
+        # Check if this date exists in the data
+        date_rows = fund_data[fund_data['Date'] == test_date]
+
+        if not date_rows.empty:
+            row = date_rows.iloc[0]
+            print(f"\n{test_date_str}:")
+            print(f"  Outcome_Period_ID: {row['Outcome_Period_ID']}")
+            print(f"  Roll_Date: {row['Roll_Date']}")
+            print(f"  Original_Cap: {row['Original_Cap']}")
+            print(f"  Starting_Fund_Value: {row['Starting_Fund_Value']}")
+            print(f"  Starting_Ref_Asset_Value: {row['Starting_Ref_Asset_Value']}")
+            print(f"  Fund Value (USD): {row['Fund Value (USD)']}")
+            print(f"  Remaining Cap: {row['Remaining Cap']}")
+        else:
+            print(f"\n{test_date_str}: NOT FOUND in data")
+
+    print("=" * 80 + "\n")
+
 
     # =============================================================================
     # STEP 4: CLASSIFY MARKET REGIMES

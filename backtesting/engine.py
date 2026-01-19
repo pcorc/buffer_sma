@@ -158,6 +158,10 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         original_cap = current_fund_row.get('Original_Cap', None)
         original_buffer = current_fund_row.get('Original_Buffer', None)
 
+        if current_date.strftime('%Y-%m-%d') == '2024-09-20':
+            x=1
+
+
         # Calculate returns from roll date
         fund_return_from_roll = None
         ref_index_return_from_roll = None

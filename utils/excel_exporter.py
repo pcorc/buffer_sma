@@ -932,9 +932,6 @@ def export_main_consolidated_workbook(results_list, summary_df, output_dir, run_
         tab.tableStyleInfo = style
         worksheet.add_table(tab)
 
-        print(f"  ✓ Tab 11: Daily Time Series ({len(combined_daily)} rows)")
-        print(f"    Filter dropdowns enabled on all columns")
-
     print(f"\n✅ Workbook created: {filepath}")
     print(f"   Total tabs: 11")
 
