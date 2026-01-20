@@ -189,45 +189,66 @@ def run_all_single_ticker_tests_parallel(
 # SEQUENTIAL EXECUTION (Original Implementation)
 # =============================================================================
 
-def run_all_single_ticker_tests(
-    df_enriched,
-    df_benchmarks,
-    roll_dates_dict,
-    trigger_selection_combos,
-    launch_months,
-    series='F'
-):
-    """
-    Run backtests sequentially for all combinations (original implementation).
+"""
+Batch execution of multiple backtest configurations.
+"""
 
-    Use this for debugging or when parallel execution causes issues.
+import pandas as pd
+from backtesting.engine import run_single_ticker_backtest
+from core.selections import get_selection_function
+
+
+def run_all_single_ticker_tests(df_enriched, df_benchmarks, roll_dates_dict,
+                                trigger_selection_combos, series='F'):
+    """
+    Run backtests for all combinations of launch months and trigger/selection configurations.
+
+    This is the main orchestrator that:
+    1. Loops through all trigger/selection combinations
+    2. For each combo, loops through its specified launch months
+    3. Calls run_single_ticker_backtest for each combination
+    4. Collects all results into a list
 
     Parameters:
-        df_enriched: Preprocessed fund data
-        df_benchmarks: Benchmark data (SPY, BUFR) with daily returns
-        roll_dates_dict: Dict of roll dates by frequency
-        trigger_selection_combos: List of trigger/selection config dicts
-        launch_months: List of launch month abbreviations
-        series: Fund series (default 'F')
+      df_enriched: Preprocessed fund data
+      df_benchmarks: Benchmark data (SPY, BUFR) with daily returns
+      roll_dates_dict: Dict of roll dates by frequency
+      trigger_selection_combos: List of dicts with trigger/selection/launch_months configs
+        Each dict should have:
+          - 'trigger_type': str
+          - 'trigger_params': dict
+          - 'selection_func_name': str
+          - 'launch_months': list of str
+          - 'strategy_intent': str (optional)
+      series: Fund series (default 'F')
 
     Returns:
-        List of result dicts from run_single_ticker_backtest
+      List of result dicts from run_single_ticker_backtest
     """
     results_list = []
-    total_tests = len(launch_months) * len(trigger_selection_combos)
+
+    # Calculate totals
+    total_tests = sum(len(combo['launch_months']) for combo in trigger_selection_combos)
     current_test = 0
     failed_tests = []
 
     print(f"\n{'#' * 80}")
-    print(f"STARTING SEQUENTIAL BACKTEST EXECUTION")
+    print(f"STARTING BATCH BACKTEST EXECUTION")
     print(f"{'#' * 80}")
     print(f"Total tests to run: {total_tests}")
-    print(f"  Launch months: {len(launch_months)}")
-    print(f"  Combinations per month: {len(trigger_selection_combos)}")
+    print(f"  Combinations: {len(trigger_selection_combos)}")
     print(f"{'#' * 80}\n")
 
-    for launch_month in launch_months:
-        for combo in trigger_selection_combos:
+    for combo in trigger_selection_combos:
+        # Extract launch months for this specific combo
+        launch_months = combo['launch_months']
+
+        print(f"\n{'=' * 80}")
+        print(f"Combination: {combo['trigger_type']} + {combo['selection_func_name']}")
+        print(f"Testing {len(launch_months)} months: {', '.join(launch_months)}")
+        print(f"{'=' * 80}")
+
+        for launch_month in launch_months:
             current_test += 1
             print(f"\n{'─' * 80}")
             print(f"Progress: {current_test}/{total_tests}")
@@ -243,7 +264,8 @@ def run_all_single_ticker_tests(
                     launch_month=launch_month,
                     trigger_config={
                         'type': combo['trigger_type'],
-                        'params': combo['trigger_params']
+                        'params': combo['trigger_params'],
+                        'strategy_intent': combo.get('strategy_intent', 'neutral')
                     },
                     selection_func=selection_func,
                     roll_dates_dict=roll_dates_dict,
@@ -275,17 +297,15 @@ def run_all_single_ticker_tests(
                 })
 
     print(f"\n{'#' * 80}")
-    print(f"SEQUENTIAL EXECUTION COMPLETE")
+    print(f"BATCH EXECUTION COMPLETE")
     print(f"{'#' * 80}")
     print(f"Successful tests: {len(results_list)}/{total_tests}")
 
     if failed_tests:
         print(f"\n⚠️  Failed tests: {len(failed_tests)}")
-        for failed in failed_tests[:5]:  # Show first 5
+        for failed in failed_tests:
             print(f"  • {failed['launch_month']} | {failed['trigger_type']} | {failed['selection']}")
             print(f"    Reason: {failed['reason']}")
-        if len(failed_tests) > 5:
-            print(f"  ... and {len(failed_tests) - 5} more")
     else:
         print(f"✅ All tests completed successfully!")
 
@@ -293,6 +313,39 @@ def run_all_single_ticker_tests(
 
     return results_list
 
+
+def run_subset_tests(df_enriched, df_benchmarks, roll_dates_dict,
+                     trigger_selection_combos, series='F',
+                     trigger_type_filter=None):
+    """
+    Run a filtered subset of backtests for testing/debugging.
+
+    Note: Launch month filtering is now done via the 'launch_months' key
+    in each combo config rather than as a separate parameter.
+
+    Parameters:
+      (same as run_all_single_ticker_tests)
+      trigger_type_filter: List of specific trigger types to test (optional)
+
+    Returns:
+      List of result dicts
+    """
+    # Filter trigger combos
+    if trigger_type_filter:
+        trigger_selection_combos = [
+            c for c in trigger_selection_combos
+            if c['trigger_type'] in trigger_type_filter
+        ]
+
+    print(f"Running subset tests:")
+    print(f"  Filtered to {len(trigger_selection_combos)} combinations")
+    for combo in trigger_selection_combos:
+        print(f"    {combo['trigger_type']} with {len(combo['launch_months'])} months")
+
+    return run_all_single_ticker_tests(
+        df_enriched, df_benchmarks, roll_dates_dict,
+        trigger_selection_combos, series
+    )
 
 # =============================================================================
 # INTENT-GROUPED PARALLEL EXECUTION
@@ -395,61 +448,3 @@ def run_tests_by_intent_groups(
 
     return all_results
 
-
-# =============================================================================
-# SUBSET TESTING (for debugging)
-# =============================================================================
-
-def run_subset_tests(
-    df_enriched,
-    df_benchmarks,
-    roll_dates_dict,
-    trigger_selection_combos,
-    launch_months,
-    series='F',
-    launch_month_filter=None,
-    trigger_type_filter=None,
-    parallel=False,
-    n_processes=None
-):
-    """
-    Run a filtered subset of backtests for testing/debugging.
-
-    Parameters:
-        (standard parameters, plus:)
-        launch_month_filter: List of specific launch months to test (optional)
-        trigger_type_filter: List of specific trigger types to test (optional)
-        parallel: Use parallel execution (default: False)
-        n_processes: Number of processes if parallel=True
-
-    Returns:
-        List of result dicts
-    """
-    # Filter launch months
-    if launch_month_filter:
-        launch_months = [m for m in launch_months if m in launch_month_filter]
-
-    # Filter trigger combos
-    if trigger_type_filter:
-        trigger_selection_combos = [
-            c for c in trigger_selection_combos
-            if c['trigger_type'] in trigger_type_filter
-        ]
-
-    print(f"Running subset tests:")
-    print(f"  Launch months: {launch_months}")
-    print(f"  Combinations: {len(trigger_selection_combos)}")
-    print(f"  Total tests: {len(launch_months) * len(trigger_selection_combos)}")
-    print(f"  Parallel: {parallel}")
-
-    if parallel:
-        return run_all_single_ticker_tests_parallel(
-            df_enriched, df_benchmarks, roll_dates_dict,
-            trigger_selection_combos, launch_months, series,
-            n_processes=n_processes
-        )
-    else:
-        return run_all_single_ticker_tests(
-            df_enriched, df_benchmarks, roll_dates_dict,
-            trigger_selection_combos, launch_months, series
-        )

@@ -6,6 +6,23 @@ import pandas as pd
 import numpy as np
 
 
+# Add these after your existing functions, before SELECTION_REGISTRY
+
+def select_remaining_cap(df_universe, current_date, series='F'):
+    """
+    Legacy alias for select_remaining_cap_highest.
+    Selects fund with highest remaining cap (most upside potential).
+    """
+    return select_remaining_cap_highest(df_universe, current_date, series)
+
+
+def select_cap_utilization(df_universe, current_date, series='F'):
+    """
+    Legacy alias for select_cap_utilization_lowest.
+    Selects fund with lowest cap utilization (most cap remaining).
+    """
+    return select_cap_utilization_lowest(df_universe, current_date, series)
+
 def select_most_recent_launch(df_universe, current_date, series='F'):
     """
     Select the fund with the most recent roll date.
@@ -345,6 +362,8 @@ def select_cost_analysis(df_universe, current_date, series='F'):
 # Selection registry for dynamic lookup
 SELECTION_REGISTRY = {
     'select_most_recent_launch': select_most_recent_launch,
+    'select_remaining_cap': select_remaining_cap,  # Add this
+    'select_cap_utilization': select_cap_utilization,  # Add this
     'select_remaining_cap_highest': select_remaining_cap_highest,
     'select_remaining_cap_lowest': select_remaining_cap_lowest,
     'select_cap_utilization_lowest': select_cap_utilization_lowest,

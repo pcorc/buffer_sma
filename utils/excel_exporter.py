@@ -634,150 +634,194 @@ def export_consolidated_workbook_append(results_list, summary_df, output_dir, ru
     return cumulative_path
 
 
-def export_main_consolidated_workbook(results_list, summary_df, output_dir, run_name='mainpy_consolidated',
-                                      df_regimes=None, regime_df=None, capture_ratios=None,
-                                      trigger_summary=None, selection_summary=None, month_summary=None):
+"""
+Excel export utilities for consolidated workbook output with forward regime analysis.
+"""
+
+
+
+def export_main_consolidated_workbook(
+        results_list, summary_df, output_dir, run_name='mainpy_consolidated',
+        df_regimes=None, regime_df=None, capture_ratios=None,
+        trigger_summary=None, selection_summary=None, month_summary=None,
+        # Forward regime parameters
+        df_forward_regimes=None, future_regime_df=None,
+        optimal_3m=None, optimal_6m=None,
+        intent_vs_regime_3m=None, intent_vs_regime_6m=None,
+        robust_strategies_3m=None, robust_strategies_6m=None,
+        ranked_6m_vs_spy=None, ranked_6m_vs_bufr=None
+):
     """
-    Export all backtest results from main.py to a single Excel workbook with multiple tabs.
+    Export comprehensive backtest results to single Excel workbook.
 
-    Optimized for large-scale backtests (100+ iterations) with strategy intent classification.
-
-    Workbook Structure:
-    - Tab 1: Summary (all iterations with key metrics)
-    - Tab 2: Trade Log (all trades with iteration details)
-    - Tab 3: Regime Analysis (regime-specific performance)
-    - Tab 4: Capture Ratios (upside/downside capture)
-    - Tab 5: By Trigger (aggregated by trigger type)
-    - Tab 6: By Selection (aggregated by selection algo)
-    - Tab 7: By Launch Month (aggregated by month)
-    - Tab 8: By Strategy Intent (aggregated by bullish/bearish/neutral)
-    - Tab 9: By Intent & Regime (strategy intent vs actual regime performance)
-    - Tab 10: By Month & Regime (launch month performance across regimes)
-    - Tab 11: Daily Time Series (all iterations, filterable with slicers)
-
-    Parameters:
-        results_list: List of result dicts from run_single_ticker_backtest
-        summary_df: Consolidated summary DataFrame
-        output_dir: Directory path for output file
-        run_name: Name prefix for the workbook file
-        df_regimes: Optional DataFrame with Date and Regime columns
-        regime_df: Optional DataFrame with regime-specific analysis
-        capture_ratios: Optional DataFrame with capture ratios
-        trigger_summary: Optional DataFrame with trigger aggregation
-        selection_summary: Optional DataFrame with selection aggregation
-        month_summary: Optional DataFrame with month aggregation
-
-    Returns:
-        Path to created workbook
+    Enhanced with forward regime analysis tabs for both 3M and 6M horizons.
     """
-    from analysis.consolidator import (
-        summarize_by_strategy_intent,
-        summarize_by_intent_and_regime,
-        summarize_by_month_and_regime
-    )
-
     os.makedirs(output_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f'{run_name}_{timestamp}.xlsx'
     filepath = os.path.join(output_dir, filename)
 
-    print(f"Creating consolidated workbook: {filename}")
+    print(f"\n{'=' * 80}")
+    print(f"EXPORTING CONSOLIDATED WORKBOOK")
+    print(f"{'=' * 80}")
+    print(f"Creating: {filename}")
 
-    # Generate additional summaries
-    intent_summary = summarize_by_strategy_intent(summary_df)
-    intent_regime_summary = summarize_by_intent_and_regime(summary_df, regime_df) if regime_df is not None else pd.DataFrame()
-    month_regime_summary = summarize_by_month_and_regime(summary_df, regime_df) if regime_df is not None else pd.DataFrame()
+    # Header formatting
+    header_fill = PatternFill(start_color='366092', end_color='366092', fill_type='solid')
+    header_font = Font(bold=True, color='FFFFFF')
 
-    # Create Excel writer
+    tab_count = 0
+
     with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
-
-        # Header formatting
-        header_fill = PatternFill(start_color='366092', end_color='366092', fill_type='solid')
-        header_font = Font(bold=True, color='FFFFFF')
 
         # =====================================================================
         # TAB 1: SUMMARY
         # =====================================================================
-
         summary_export = summary_df.copy()
         summary_export.insert(0, 'iteration', range(1, len(summary_export) + 1))
 
-        # Format percentages
+        # Round numeric columns
         pct_cols = [col for col in summary_export.columns if 'return' in col or 'excess' in col or 'dd' in col or 'volatility' in col]
         for col in pct_cols:
             if col in summary_export.columns:
                 summary_export[col] = summary_export[col].round(4)
-
         if 'strategy_sharpe' in summary_export.columns:
             summary_export['strategy_sharpe'] = summary_export['strategy_sharpe'].round(2)
 
         summary_export.to_excel(writer, sheet_name='Summary', index=False)
         _format_sheet(writer.sheets['Summary'], header_fill, header_font)
-        print(f"  ✓ Tab 1: Summary ({len(summary_export)} iterations)")
+        tab_count += 1
+        print(f"  ✓ Tab {tab_count}: Summary ({len(summary_export)} iterations)")
 
         # =====================================================================
-        # TAB 2: TRADE LOG
+        # TAB 2: FUTURE REGIME ANALYSIS (6M)
         # =====================================================================
-
-        all_trades = []
-        for idx, result in enumerate(results_list, 1):
-            if result['trade_history'].empty:
-                continue
-
-            trades = result['trade_history'].copy()
-            trades.insert(0, 'iteration', idx)
-            trades['launch_month'] = result['launch_month']
-            trades['trigger_type'] = result['trigger_type']
-            trades['trigger_params'] = str(result['trigger_params'])
-            trades['selection_algo'] = result['selection_algo']
-            trades['strategy_intent'] = result.get('strategy_intent', 'neutral')
-
-            trades['Selection_Reason'] = trades.apply(
-                lambda row: _get_selection_reason(result['selection_algo'], row['To_Fund']),
-                axis=1
-            )
-
-            if df_regimes is not None:
-                trades = trades.merge(df_regimes[['Date', 'Regime']], on='Date', how='left')
-                trades['Regime'] = trades['Regime'].fillna('unknown')
-
-            all_trades.append(trades)
-
-        if all_trades:
-            combined_trades = pd.concat(all_trades, ignore_index=True)
-
-            base_cols = [
-                'iteration', 'Date', 'launch_month', 'trigger_type', 'trigger_params',
-                'selection_algo', 'strategy_intent', 'From_Fund', 'To_Fund',
-                'Trigger_Reason', 'Selection_Reason', 'NAV_at_Switch'
-            ]
-
-            if df_regimes is not None and 'Regime' in combined_trades.columns:
-                base_cols.insert(2, 'Regime')
-
-            combined_trades = combined_trades[base_cols]
-            combined_trades.to_excel(writer, sheet_name='Trade Log', index=False)
-            _format_sheet(writer.sheets['Trade Log'], header_fill, header_font)
-            print(f"  ✓ Tab 2: Trade Log ({len(combined_trades)} trades)")
-        else:
-            print(f"  ⚠ Tab 2: Trade Log (no trades)")
+        if future_regime_df is not None and not future_regime_df.empty:
+            future_export = future_regime_df.copy()
+            numeric_cols = future_export.select_dtypes(include=['float64']).columns
+            future_export[numeric_cols] = future_export[numeric_cols].round(4)
+            future_export.to_excel(writer, sheet_name='Future Regime Analysis', index=False)
+            _format_sheet(writer.sheets['Future Regime Analysis'], header_fill, header_font)
+            tab_count += 1
+            print(f"  ✓ Tab {tab_count}: Future Regime Analysis ({len(future_export)} records)")
 
         # =====================================================================
-        # TAB 3: REGIME ANALYSIS
+        # TABS 3-5: OPTIMAL STRATEGIES BY REGIME (6M)
+        # =====================================================================
+        if optimal_6m:
+            for regime in ['bull', 'bear', 'neutral']:
+                if regime in optimal_6m and not optimal_6m[regime].empty:
+                    regime_optimal = optimal_6m[regime].copy()
+                    numeric_cols = regime_optimal.select_dtypes(include=['float64']).columns
+                    regime_optimal[numeric_cols] = regime_optimal[numeric_cols].round(4)
+
+                    sheet_name = f'Optimal-{regime.title()} (6M)'
+                    regime_optimal.to_excel(writer, sheet_name=sheet_name, index=False)
+                    _format_sheet(writer.sheets[sheet_name], header_fill, header_font)
+                    tab_count += 1
+                    print(f"  ✓ Tab {tab_count}: {sheet_name} ({len(regime_optimal)} strategies)")
+
+        # =====================================================================
+        # TABS 6-8: OPTIMAL STRATEGIES BY REGIME (3M)
+        # =====================================================================
+        if optimal_3m:
+            for regime in ['bull', 'bear', 'neutral']:
+                if regime in optimal_3m and not optimal_3m[regime].empty:
+                    regime_optimal = optimal_3m[regime].copy()
+                    numeric_cols = regime_optimal.select_dtypes(include=['float64']).columns
+                    regime_optimal[numeric_cols] = regime_optimal[numeric_cols].round(4)
+
+                    sheet_name = f'Optimal-{regime.title()} (3M)'
+                    regime_optimal.to_excel(writer, sheet_name=sheet_name, index=False)
+                    _format_sheet(writer.sheets[sheet_name], header_fill, header_font)
+                    tab_count += 1
+                    print(f"  ✓ Tab {tab_count}: {sheet_name} ({len(regime_optimal)} strategies)")
+
+        # =====================================================================
+        # TAB: INTENT VS FUTURE REGIME (6M)
+        # =====================================================================
+        if intent_vs_regime_6m is not None and not intent_vs_regime_6m.empty:
+            intent_export = intent_vs_regime_6m.copy()
+            numeric_cols = intent_export.select_dtypes(include=['float64']).columns
+            intent_export[numeric_cols] = intent_export[numeric_cols].round(4)
+            intent_export.to_excel(writer, sheet_name='Intent vs Future (6M)', index=False)
+            _format_sheet(writer.sheets['Intent vs Future (6M)'], header_fill, header_font)
+            tab_count += 1
+            print(f"  ✓ Tab {tab_count}: Intent vs Future (6M)")
+
+        # =====================================================================
+        # TAB: INTENT VS FUTURE REGIME (3M)
+        # =====================================================================
+        if intent_vs_regime_3m is not None and not intent_vs_regime_3m.empty:
+            intent_export = intent_vs_regime_3m.copy()
+            numeric_cols = intent_export.select_dtypes(include=['float64']).columns
+            intent_export[numeric_cols] = intent_export[numeric_cols].round(4)
+            intent_export.to_excel(writer, sheet_name='Intent vs Future (3M)', index=False)
+            _format_sheet(writer.sheets['Intent vs Future (3M)'], header_fill, header_font)
+            tab_count += 1
+            print(f"  ✓ Tab {tab_count}: Intent vs Future (3M)")
+
+        # =====================================================================
+        # TAB: ROBUST STRATEGIES (6M)
+        # =====================================================================
+        if robust_strategies_6m is not None and not robust_strategies_6m.empty:
+            robust_export = robust_strategies_6m.copy()
+            numeric_cols = robust_export.select_dtypes(include=['float64']).columns
+            robust_export[numeric_cols] = robust_export[numeric_cols].round(4)
+            robust_export.to_excel(writer, sheet_name='Robust Strategies (6M)', index=False)
+            _format_sheet(writer.sheets['Robust Strategies (6M)'], header_fill, header_font)
+            tab_count += 1
+            print(f"  ✓ Tab {tab_count}: Robust Strategies (6M) ({len(robust_export)} strategies)")
+
+        # =====================================================================
+        # TAB: ROBUST STRATEGIES (3M)
+        # =====================================================================
+        if robust_strategies_3m is not None and not robust_strategies_3m.empty:
+            robust_export = robust_strategies_3m.copy()
+            numeric_cols = robust_export.select_dtypes(include=['float64']).columns
+            robust_export[numeric_cols] = robust_export[numeric_cols].round(4)
+            robust_export.to_excel(writer, sheet_name='Robust Strategies (3M)', index=False)
+            _format_sheet(writer.sheets['Robust Strategies (3M)'], header_fill, header_font)
+            tab_count += 1
+            print(f"  ✓ Tab {tab_count}: Robust Strategies (3M) ({len(robust_export)} strategies)")
+
+        # =====================================================================
+        # TAB: RANKED BY VS BUFR (6M)
+        # =====================================================================
+        if ranked_6m_vs_bufr is not None and not ranked_6m_vs_bufr.empty:
+            ranked_export = ranked_6m_vs_bufr.copy()
+            numeric_cols = ranked_export.select_dtypes(include=['float64']).columns
+            ranked_export[numeric_cols] = ranked_export[numeric_cols].round(4)
+            ranked_export.to_excel(writer, sheet_name='Ranked vs BUFR (6M)', index=False)
+            _format_sheet(writer.sheets['Ranked vs BUFR (6M)'], header_fill, header_font)
+            tab_count += 1
+            print(f"  ✓ Tab {tab_count}: Ranked vs BUFR (6M)")
+
+        # =====================================================================
+        # TAB: RANKED BY VS SPY (6M)
+        # =====================================================================
+        if ranked_6m_vs_spy is not None and not ranked_6m_vs_spy.empty:
+            ranked_export = ranked_6m_vs_spy.copy()
+            numeric_cols = ranked_export.select_dtypes(include=['float64']).columns
+            ranked_export[numeric_cols] = ranked_export[numeric_cols].round(4)
+            ranked_export.to_excel(writer, sheet_name='Ranked vs SPY (6M)', index=False)
+            _format_sheet(writer.sheets['Ranked vs SPY (6M)'], header_fill, header_font)
+            tab_count += 1
+            print(f"  ✓ Tab {tab_count}: Ranked vs SPY (6M)")
+
+        # =====================================================================
+        # ORIGINAL ANALYSIS TABS
         # =====================================================================
 
         if regime_df is not None and not regime_df.empty:
             regime_export = regime_df.copy()
             numeric_cols = regime_export.select_dtypes(include=['float64']).columns
             regime_export[numeric_cols] = regime_export[numeric_cols].round(4)
-            regime_export.to_excel(writer, sheet_name='Regime Analysis', index=False)
-            _format_sheet(writer.sheets['Regime Analysis'], header_fill, header_font)
-            print(f"  ✓ Tab 3: Regime Analysis ({len(regime_export)} records)")
-
-        # =====================================================================
-        # TAB 4: CAPTURE RATIOS
-        # =====================================================================
+            regime_export.to_excel(writer, sheet_name='Current Regime Analysis', index=False)
+            _format_sheet(writer.sheets['Current Regime Analysis'], header_fill, header_font)
+            tab_count += 1
+            print(f"  ✓ Tab {tab_count}: Current Regime Analysis")
 
         if capture_ratios is not None and not capture_ratios.empty:
             capture_export = capture_ratios.copy()
@@ -785,35 +829,26 @@ def export_main_consolidated_workbook(results_list, summary_df, output_dir, run_
             capture_export[numeric_cols] = capture_export[numeric_cols].round(4)
             capture_export.to_excel(writer, sheet_name='Capture Ratios', index=False)
             _format_sheet(writer.sheets['Capture Ratios'], header_fill, header_font)
-            print(f"  ✓ Tab 4: Capture Ratios ({len(capture_export)} strategies)")
-
-        # =====================================================================
-        # TAB 5: BY TRIGGER
-        # =====================================================================
+            tab_count += 1
+            print(f"  ✓ Tab {tab_count}: Capture Ratios")
 
         if trigger_summary is not None and not trigger_summary.empty:
             trigger_export = trigger_summary.copy()
             numeric_cols = trigger_export.select_dtypes(include=['float64']).columns
             trigger_export[numeric_cols] = trigger_export[numeric_cols].round(4)
-            trigger_export.to_excel(writer, sheet_name='By Trigger', index=False)
-            _format_sheet(writer.sheets['By Trigger'], header_fill, header_font)
-            print(f"  ✓ Tab 5: By Trigger ({len(trigger_export)} trigger types)")
-
-        # =====================================================================
-        # TAB 6: BY SELECTION
-        # =====================================================================
+            trigger_export.to_excel(writer, sheet_name='By Trigger Type', index=False)
+            _format_sheet(writer.sheets['By Trigger Type'], header_fill, header_font)
+            tab_count += 1
+            print(f"  ✓ Tab {tab_count}: By Trigger Type")
 
         if selection_summary is not None and not selection_summary.empty:
             selection_export = selection_summary.copy()
             numeric_cols = selection_export.select_dtypes(include=['float64']).columns
             selection_export[numeric_cols] = selection_export[numeric_cols].round(4)
-            selection_export.to_excel(writer, sheet_name='By Selection', index=False)
-            _format_sheet(writer.sheets['By Selection'], header_fill, header_font)
-            print(f"  ✓ Tab 6: By Selection ({len(selection_export)} selection algos)")
-
-        # =====================================================================
-        # TAB 7: BY LAUNCH MONTH
-        # =====================================================================
+            selection_export.to_excel(writer, sheet_name='By Selection Algo', index=False)
+            _format_sheet(writer.sheets['By Selection Algo'], header_fill, header_font)
+            tab_count += 1
+            print(f"  ✓ Tab {tab_count}: By Selection Algo")
 
         if month_summary is not None and not month_summary.empty:
             month_export = month_summary.copy()
@@ -821,134 +856,23 @@ def export_main_consolidated_workbook(results_list, summary_df, output_dir, run_
             month_export[numeric_cols] = month_export[numeric_cols].round(4)
             month_export.to_excel(writer, sheet_name='By Launch Month', index=False)
             _format_sheet(writer.sheets['By Launch Month'], header_fill, header_font)
-            print(f"  ✓ Tab 7: By Launch Month ({len(month_export)} months)")
+            tab_count += 1
+            print(f"  ✓ Tab {tab_count}: By Launch Month")
 
-        # =====================================================================
-        # TAB 8: BY STRATEGY INTENT
-        # =====================================================================
-
-        if not intent_summary.empty:
-            intent_export = intent_summary.copy()
-            numeric_cols = intent_export.select_dtypes(include=['float64']).columns
-            intent_export[numeric_cols] = intent_export[numeric_cols].round(4)
-            intent_export.to_excel(writer, sheet_name='By Strategy Intent', index=False)
-            _format_sheet(writer.sheets['By Strategy Intent'], header_fill, header_font)
-            print(f"  ✓ Tab 8: By Strategy Intent ({len(intent_export)} intents)")
-
-        # =====================================================================
-        # TAB 9: BY INTENT & REGIME
-        # =====================================================================
-
-        if not intent_regime_summary.empty:
-            intent_regime_export = intent_regime_summary.copy()
-            numeric_cols = intent_regime_export.select_dtypes(include=['float64']).columns
-            intent_regime_export[numeric_cols] = intent_regime_export[numeric_cols].round(4)
-            intent_regime_export.to_excel(writer, sheet_name='By Intent & Regime', index=False)
-            _format_sheet(writer.sheets['By Intent & Regime'], header_fill, header_font)
-            print(f"  ✓ Tab 9: By Intent & Regime ({len(intent_regime_export)} combinations)")
-
-        # =====================================================================
-        # TAB 10: BY MONTH & REGIME
-        # =====================================================================
-
-        if not month_regime_summary.empty:
-            month_regime_export = month_regime_summary.copy()
-            numeric_cols = month_regime_export.select_dtypes(include=['float64']).columns
-            month_regime_export[numeric_cols] = month_regime_export[numeric_cols].round(4)
-            month_regime_export.to_excel(writer, sheet_name='By Month & Regime', index=False)
-            _format_sheet(writer.sheets['By Month & Regime'], header_fill, header_font)
-            print(f"  ✓ Tab 10: By Month & Regime ({len(month_regime_export)} combinations)")
-
-        # =====================================================================
-        # TAB 11: DAILY TIME SERIES (ALL) - WITH SLICERS
-        # =====================================================================
-
-        print(f"  ⏳ Tab 11: Compiling daily time series...")
-
-        all_daily = []
-        for idx, result in enumerate(results_list, 1):
-            daily = result['daily_performance'].copy()
-
-            # Add iteration metadata
-            daily.insert(0, 'iteration', idx)
-            daily.insert(1, 'launch_month', result['launch_month'])
-            daily.insert(2, 'trigger_type', result['trigger_type'])
-            daily.insert(3, 'trigger_params', str(result['trigger_params']))
-            daily.insert(4, 'selection_algo', result['selection_algo'])
-            daily.insert(5, 'strategy_intent', result.get('strategy_intent', 'neutral'))
-
-            # Add regime if available
-            if df_regimes is not None:
-                daily = daily.merge(df_regimes[['Date', 'Regime']], on='Date', how='left')
-                daily['Regime'] = daily['Regime'].fillna('unknown')
-                # Move Regime column
-                cols = list(daily.columns)
-                cols.insert(6, cols.pop(cols.index('Regime')))
-                daily = daily[cols]
-
-            # Add trade indicator
-            daily['Trade_Occurred'] = False
-            if not result['trade_history'].empty:
-                trade_dates = set(result['trade_history']['Date'])
-                daily['Trade_Occurred'] = daily['Date'].isin(trade_dates)
-
-            # Calculate daily returns
-            daily['Strategy_Daily_Return'] = daily['Strategy_NAV'].pct_change()
-            daily['SPY_Daily_Return'] = daily['SPY_NAV'].pct_change()
-            daily['BUFR_Daily_Return'] = daily['BUFR_NAV'].pct_change()
-            daily['Hold_Daily_Return'] = daily['Hold_NAV'].pct_change()
-
-            # Calculate relative performance
-            daily['Strategy_vs_SPY'] = (daily['Strategy_NAV'] / daily['SPY_NAV']) * 100
-            daily['Strategy_vs_BUFR'] = (daily['Strategy_NAV'] / daily['BUFR_NAV']) * 100
-            daily['Strategy_vs_Hold'] = (daily['Strategy_NAV'] / daily['Hold_NAV']) * 100
-
-            all_daily.append(daily)
-
-        combined_daily = pd.concat(all_daily, ignore_index=True)
-
-        # Round numeric columns
-        numeric_cols = combined_daily.select_dtypes(include=['float64']).columns
-        combined_daily[numeric_cols] = combined_daily[numeric_cols].round(6)
-
-        # Write to Excel
-        combined_daily.to_excel(writer, sheet_name='Daily Time Series', index=False, startrow=0)
-
-        # Format as Excel Table with filters
-        worksheet = writer.sheets['Daily Time Series']
-        _format_sheet(worksheet, header_fill, header_font)
-
-        # Convert to Excel Table for filtering
-        from openpyxl.worksheet.table import Table, TableStyleInfo
-
-        tab = Table(displayName="TimeSeriesTable", ref=f"A1:{chr(65 + len(combined_daily.columns) - 1)}{len(combined_daily) + 1}")
-        style = TableStyleInfo(
-            name="TableStyleMedium9",
-            showFirstColumn=False,
-            showLastColumn=False,
-            showRowStripes=True,
-            showColumnStripes=False
-        )
-        tab.tableStyleInfo = style
-        worksheet.add_table(tab)
-
-    print(f"\n✅ Workbook created: {filepath}")
-    print(f"   Total tabs: 11")
+    print(f"\n✅ Workbook created with {tab_count} tabs")
+    print(f"   Location: {filepath}")
+    print(f"{'=' * 80}\n")
 
     return filepath
 
 
 def _format_sheet(worksheet, header_fill, header_font):
-    """
-    Apply consistent formatting to a worksheet.
-    """
-    # Format header row
+    """Apply consistent formatting to worksheet."""
     for cell in worksheet[1]:
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
-    # Auto-adjust column widths
     for column in worksheet.columns:
         max_length = 0
         column_letter = column[0].column_letter
@@ -961,5 +885,4 @@ def _format_sheet(worksheet, header_fill, header_font):
         adjusted_width = min(max_length + 2, 50)
         worksheet.column_dimensions[column_letter].width = adjusted_width
 
-    # Freeze header row
     worksheet.freeze_panes = 'A2'
