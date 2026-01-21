@@ -192,81 +192,137 @@ def plot_1_all_strategies_with_best(results_list, summary_df, output_dir):
 
 def plot_2_best_comparison(results_list, summary_df, output_dir):
     """
-    Plot 2: Best bullish vs best bearish vs benchmarks.
+    Plot 2: Best strategy comparison (top performers only).
 
-    Clean comparison of top performers by different criteria:
-    - Best bullish (Sharpe)
-    - Best bullish (Return)
-    - Best bearish (Sharpe)
-    - Best bearish (Drawdown)
-    - SPY, BUFR
+    Handles cases with:
+    - Multiple intents (shows best of each)
+    - Single intent (shows top 2-3 by different criteria)
     """
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+
     print("\nGenerating Plot 2: Best Strategy Comparison...")
 
-    fig, ax = plt.subplots(figsize=(16, 9))
+    if summary_df.empty:
+        print("  ⚠ No data for Plot 2")
+        return
 
-    # Find best strategies
-    best = find_best_strategies(summary_df)
+    fig, ax = plt.subplots(figsize=(14, 8))
 
-    # Create strategy ID for matching
-    def make_strategy_id(row):
-        return f"{row['launch_month']}_{row['trigger_type']}_{row['selection_algo']}"
+    # Check if we have strategy_intent column
+    has_intent = 'strategy_intent' in summary_df.columns
 
-    best_ids = {
-        'bullish_sharpe': make_strategy_id(best['bullish_sharpe']),
-        'bullish_return': make_strategy_id(best['bullish_return']),
-        'bearish_sharpe': make_strategy_id(best['bearish_sharpe']),
-        'bearish_drawdown': make_strategy_id(best['bearish_drawdown'])
-    }
+    if has_intent and summary_df['strategy_intent'].nunique() > 1:
+        # Multiple intents - show best of each
+        best_strategies = {}
 
-    # Plot best strategies
+        # Get best by different criteria for each intent
+        for intent in summary_df['strategy_intent'].unique():
+            intent_data = summary_df[summary_df['strategy_intent'] == intent]
+
+            if not intent_data.empty:
+                # Best Sharpe ratio for this intent
+                best_idx = intent_data['strategy_sharpe'].idxmax()
+                best_strategies[f'{intent}_sharpe'] = intent_data.loc[best_idx]
+
+        strategy_ids = {}
+        for key, row in best_strategies.items():
+            strategy_ids[key] = f"{row['launch_month']}_{row['trigger_type']}_{row['selection_algo']}"
+
+        plot_colors = {
+            'bullish_sharpe': '#2ca02c',
+            'bearish_sharpe': '#d62728',
+            'neutral_sharpe': '#1f77b4',
+            'cost_optimized_sharpe': '#ff7f0e'
+        }
+
+        labels = {
+            'bullish_sharpe': 'Bullish (Best Sharpe)',
+            'bearish_sharpe': 'Bearish (Best Sharpe)',
+            'neutral_sharpe': 'Neutral (Best Sharpe)',
+            'cost_optimized_sharpe': 'Cost-Opt (Best Sharpe)'
+        }
+
+    else:
+        # Single intent or no intent column - show top performers by different criteria
+        best_strategies = {}
+
+        # Top 3 strategies by different metrics
+        best_strategies['best_sharpe'] = summary_df.loc[summary_df['strategy_sharpe'].idxmax()]
+        best_strategies['best_return'] = summary_df.loc[summary_df['strategy_return'].idxmax()]
+
+        # Best vs BUFR if different from above
+        best_bufr_idx = summary_df['vs_bufr_excess'].idxmax()
+        if best_bufr_idx not in [summary_df['strategy_sharpe'].idxmax(),
+                                 summary_df['strategy_return'].idxmax()]:
+            best_strategies['best_vs_bufr'] = summary_df.loc[best_bufr_idx]
+
+        strategy_ids = {}
+        for key, row in best_strategies.items():
+            strategy_ids[key] = f"{row['launch_month']}_{row['trigger_type']}_{row['selection_algo']}"
+
+        plot_colors = {
+            'best_sharpe': '#1f77b4',
+            'best_return': '#2ca02c',
+            'best_vs_bufr': '#ff7f0e'
+        }
+
+        labels = {
+            'best_sharpe': 'Best Sharpe Ratio',
+            'best_return': 'Best Total Return',
+            'best_vs_bufr': 'Best vs BUFR'
+        }
+
+    # Plot strategies
+    plotted_strategies = []
+
     for result in results_list:
         result_id = f"{result['launch_month']}_{result['trigger_type']}_{result['selection_algo']}"
-        daily = result['daily_performance']
 
-        if result_id == best_ids['bullish_sharpe']:
-            ax.plot(daily['Date'], daily['Strategy_NAV'],
-                    color=BULLISH_COLOR, linewidth=2.5, alpha=0.9,
-                    label=f"Best Bullish (Sharpe: {best['bullish_sharpe']['strategy_sharpe']:.2f})",
-                    zorder=10)
+        # Check if this is one of our best strategies
+        matching_key = None
+        for key, strat_id in strategy_ids.items():
+            if result_id == strat_id:
+                matching_key = key
+                break
 
-        elif result_id == best_ids['bullish_return']:
-            ax.plot(daily['Date'], daily['Strategy_NAV'],
-                    color=BULLISH_LIGHT, linewidth=2.5, alpha=0.9, linestyle='--',
-                    label=f"Best Bullish (Return: {best['bullish_return']['strategy_return'] * 100:.2f}%)",
-                    zorder=10)
+        if matching_key:
+            daily_nav = result['daily_performance']
+            color = plot_colors.get(matching_key, '#333333')
+            label = labels.get(matching_key, matching_key)
 
-        elif result_id == best_ids['bearish_sharpe']:
-            ax.plot(daily['Date'], daily['Strategy_NAV'],
-                    color=BEARISH_COLOR, linewidth=2.5, alpha=0.9,
-                    label=f"Best Bearish (Sharpe: {best['bearish_sharpe']['strategy_sharpe']:.2f})",
-                    zorder=10)
+            ax.plot(daily_nav['Date'], daily_nav['Strategy_NAV'],
+                    color=color, linewidth=2.5, alpha=0.9,
+                    label=label, zorder=10)
 
-        elif result_id == best_ids['bearish_drawdown']:
-            ax.plot(daily['Date'], daily['Strategy_NAV'],
-                    color=BEARISH_LIGHT, linewidth=2.5, alpha=0.9, linestyle='--',
-                    label=f"Best Bearish (Max DD: {best['bearish_drawdown']['strategy_max_dd'] * 100:.2f}%)",
-                    zorder=10)
+            plotted_strategies.append(matching_key)
+
+            # Print strategy details
+            row = best_strategies[matching_key]
+            print(f"  {label}:")
+            print(f"    {row['launch_month']} | {row['trigger_type']}")
+            print(f"    Return: {row['strategy_return'] * 100:+.2f}% | Sharpe: {row['strategy_sharpe']:.2f}")
 
     # Plot benchmarks
     if results_list:
-        benchmark = results_list[0]['daily_performance']
-        ax.plot(benchmark['Date'], benchmark['SPY_NAV'],
-                color=BENCHMARK_COLORS['SPY'], linewidth=2, linestyle='--',
+        benchmark_nav = results_list[0]['daily_performance']
+
+        ax.plot(benchmark_nav['Date'], benchmark_nav['SPY_NAV'],
+                color='#757575', linewidth=2.0, linestyle='--',
                 alpha=0.7, label='SPY', zorder=5)
-        ax.plot(benchmark['Date'], benchmark['BUFR_NAV'],
-                color=BENCHMARK_COLORS['BUFR'], linewidth=2, linestyle=':',
+
+        ax.plot(benchmark_nav['Date'], benchmark_nav['BUFR_NAV'],
+                color='#9E9E9E', linewidth=2.0, linestyle=':',
                 alpha=0.7, label='BUFR', zorder=5)
 
     # Formatting
-    ax.set_title('Best Strategies Comparison: Bullish vs Bearish',
-                 fontsize=16, fontweight='bold')
+    ax.set_title('Top Performing Strategies', fontsize=16, fontweight='bold')
     ax.set_xlabel('Date', fontsize=12)
     ax.set_ylabel('NAV (Normalized to 100)', fontsize=12)
-    ax.legend(loc='upper left', fontsize=10)
     ax.grid(True, alpha=0.3)
+    ax.legend(loc='upper left', fontsize=10, framealpha=0.9)
 
-    # Format dates
+    # Format x-axis
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
     ax.xaxis.set_major_locator(mdates.YearLocator())
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
@@ -277,16 +333,13 @@ def plot_2_best_comparison(results_list, summary_df, output_dir):
     filename = 'plot2_best_comparison.png'
     filepath = os.path.join(output_dir, filename)
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
-
-    # Show in PyCharm
-    plt.show()
+    plt.close()
 
     print(f"  ✓ Saved: {filename}")
 
-    return filepath
 
 
-def plot_3_best_by_forward_regime(results_list, summary_df, future_regime_df, optimal_6m, output_dir):
+def plot_3_strategy_selection_by_forecast(results_list, summary_df, future_regime_df, optimal_6m, output_dir):
     """
     Plot 3: Best strategy for each forward regime.
 
@@ -382,7 +435,7 @@ def create_all_batch_plots(results_list, summary_df, future_regime_df, optimal_6
 
     plot_1_all_strategies_with_best(results_list, summary_df, output_dir)
     plot_2_best_comparison(results_list, summary_df, output_dir)
-    plot_3_best_by_forward_regime(results_list, summary_df, future_regime_df, optimal_6m, output_dir)
+    plot_3_strategy_selection_by_forecast(results_list, summary_df, future_regime_df, optimal_6m, output_dir)
 
     print("\n" + "=" * 80)
     print("ALL PLOTS COMPLETE")

@@ -538,3 +538,328 @@ def create_all_plots(
     print("\n" + "#" * 80)
     print("# ALL VISUALIZATIONS COMPLETE")
     print("#" * 80 + "\n")
+
+
+def plot_regime_performance_with_bufr(
+        future_regime_df: pd.DataFrame,
+        optimal_strategies: dict,
+        output_dir: str
+):
+    """
+    Chart: Strategy performance across bull/neutral/bear markets with BUFR benchmark.
+
+    Shows performance of bullish and defensive strategies vs BUFR in each regime.
+    Creates stacked bar chart showing absolute returns for comparison.
+
+    Parameters:
+        future_regime_df: DataFrame with regime-specific performance data
+        optimal_strategies: Dict with 'bull', 'bear', 'neutral' keys containing top strategies
+        output_dir: Directory to save chart
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    print("\nGenerating regime performance comparison chart...")
+
+    if future_regime_df.empty or not optimal_strategies:
+        print("  ⚠ No regime data available for plotting")
+        return
+
+    # Get top strategies
+    bull_strats = optimal_strategies.get('bull')
+    bear_strats = optimal_strategies.get('bear')
+
+    if bull_strats is None or bull_strats.empty:
+        print("  ⚠ No bullish strategy found")
+        return
+
+    if bear_strats is None or bear_strats.empty:
+        print("  ⚠ No defensive strategy found")
+        return
+
+    strategy_bullish = bull_strats.iloc[0]
+    strategy_defensive = bear_strats.iloc[0]
+
+    # Print strategy details
+    print(f"\n  Bullish Strategy:")
+    print(f"    {strategy_bullish['launch_month']} | {strategy_bullish['trigger_type']}")
+    print(f"    {strategy_bullish['selection_algo']}")
+
+    print(f"\n  Defensive Strategy:")
+    print(f"    {strategy_defensive['launch_month']} | {strategy_defensive['trigger_type']}")
+    print(f"    {strategy_defensive['selection_algo']}")
+
+    # Detect which columns to use (3M or 6M)
+    if 'future_regime_3m' in future_regime_df.columns:
+        regime_col = 'future_regime_3m'
+        return_col_suffix = '_3m'
+        horizon = '3M'
+    elif 'future_regime_6m' in future_regime_df.columns:
+        regime_col = 'future_regime_6m'
+        return_col_suffix = '_6m'
+        horizon = '6M'
+    else:
+        print("  ⚠ No regime classification column found")
+        return
+
+    # Build full column names
+    strat_return_col = f'avg_return{return_col_suffix}'
+    bufr_return_col = f'avg_bufr_return{return_col_suffix}'
+
+    # Verify columns exist
+    if strat_return_col not in future_regime_df.columns:
+        print(f"  ⚠ Column '{strat_return_col}' not found")
+        print(f"  Available columns: {list(future_regime_df.columns)}")
+        return
+
+    print(f"\n  Using {horizon} forward-looking regime analysis")
+    print(f"  Columns: {regime_col}, {strat_return_col}, {bufr_return_col}")
+
+    # Collect performance data
+    regimes = ['bull', 'neutral', 'bear']
+    regime_labels = ['Bull', 'Neutral', 'Bear']
+
+    bullish_returns = []
+    defensive_returns = []
+    bufr_returns = []
+
+    print("\n  Performance by Regime:")
+    print("  " + "=" * 70)
+
+    for regime in regimes:
+        regime_data = future_regime_df[future_regime_df[regime_col] == regime]
+
+        if regime_data.empty:
+            print(f"  {regime.upper():8s}: No data")
+            bullish_returns.append(0)
+            defensive_returns.append(0)
+            bufr_returns.append(0)
+            continue
+
+        # Get bullish strategy performance
+        bullish_data = regime_data[
+            (regime_data['launch_month'] == strategy_bullish['launch_month']) &
+            (regime_data['trigger_type'] == strategy_bullish['trigger_type']) &
+            (regime_data['selection_algo'] == strategy_bullish['selection_algo'])
+            ]
+
+        # Get defensive strategy performance
+        defensive_data = regime_data[
+            (regime_data['launch_month'] == strategy_defensive['launch_month']) &
+            (regime_data['trigger_type'] == strategy_defensive['trigger_type']) &
+            (regime_data['selection_algo'] == strategy_defensive['selection_algo'])
+            ]
+
+        # Extract returns
+        if not bullish_data.empty:
+            bull_ret = bullish_data[strat_return_col].mean()
+            bufr_ret = bullish_data[bufr_return_col].mean()
+            bullish_returns.append(bull_ret)
+            bufr_returns.append(bufr_ret)
+        else:
+            bullish_returns.append(0)
+            bufr_returns.append(0)
+            bull_ret = 0
+            bufr_ret = 0
+
+        if not defensive_data.empty:
+            def_ret = defensive_data[strat_return_col].mean()
+            defensive_returns.append(def_ret)
+        else:
+            defensive_returns.append(0)
+            def_ret = 0
+
+        # Print to terminal
+        print(f"  {regime.upper():8s}:")
+        print(f"    Bullish:   {bull_ret * 100:+6.1f}%")
+        print(f"    Defensive: {def_ret * 100:+6.1f}%")
+        print(f"    BUFR:      {bufr_ret * 100:+6.1f}%")
+        print(f"    Bullish vs BUFR: {(bull_ret - bufr_ret) * 100:+6.1f}%")
+        print(f"    Defensive vs BUFR: {(def_ret - bufr_ret) * 100:+6.1f}%")
+
+    print("  " + "=" * 70)
+
+    # Create visualization
+    fig, ax = plt.subplots(figsize=(14, 8))
+
+    x = np.arange(len(regimes))
+    width = 0.25
+
+    # Create bars
+    bars1 = ax.bar(x - width, np.array(bullish_returns) * 100, width,
+                   label='Bullish Strategy', color='#2ca02c', alpha=0.85,
+                   edgecolor='black', linewidth=1.5)
+
+    bars2 = ax.bar(x, np.array(defensive_returns) * 100, width,
+                   label='Defensive Strategy', color='#d62728', alpha=0.85,
+                   edgecolor='black', linewidth=1.5)
+
+    bars3 = ax.bar(x + width, np.array(bufr_returns) * 100, width,
+                   label='BUFR Benchmark', color='#ff7f0e', alpha=0.7,
+                   edgecolor='black', linewidth=1.5)
+
+    # Add value labels on bars
+    def add_value_labels(bars, values):
+        for bar, val in zip(bars, values):
+            height = bar.get_height()
+            if abs(height) < 0.5:  # Skip very small values
+                continue
+
+            # Position label above or below bar depending on sign
+            if height >= 0:
+                y_pos = height + 0.5
+                va = 'bottom'
+            else:
+                y_pos = height - 0.5
+                va = 'top'
+
+            ax.text(bar.get_x() + bar.get_width() / 2, y_pos,
+                    f'{val * 100:.1f}%',
+                    ha='center', va=va, fontsize=10, fontweight='bold')
+
+    add_value_labels(bars1, bullish_returns)
+    add_value_labels(bars2, defensive_returns)
+    add_value_labels(bars3, bufr_returns)
+
+    # Add text box with strategy descriptions
+    textstr = ('Bullish strategy captures upside in Bull markets\n'
+               'Defensive strategy preserves capital in Bear markets\n'
+               'Both strategies compared against BUFR benchmark')
+
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.3)
+    ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=10,
+            verticalalignment='top', bbox=props)
+
+    # Formatting
+    ax.set_xlabel(f'Market Regime ({horizon} Forward)', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Strategy Return (%)', fontsize=13, fontweight='bold')
+    ax.set_title('Strategy Performance Across Market Regimes (vs BUFR)',
+                 fontsize=15, fontweight='bold', pad=20)
+    ax.set_xticks(x)
+    ax.set_xticklabels(regime_labels, fontsize=12)
+    ax.legend(loc='upper right', fontsize=11, framealpha=0.95)
+    ax.axhline(y=0, color='black', linestyle='--', linewidth=1.2, alpha=0.4)
+    ax.grid(True, alpha=0.3, axis='y', linestyle=':')
+
+    # Add padding to y-axis
+    y_min, y_max = ax.get_ylim()
+    padding = (y_max - y_min) * 0.1
+    ax.set_ylim(y_min - padding, y_max + padding)
+
+    plt.tight_layout()
+
+    # Save figure
+    filepath = os.path.join(output_dir, 'regime_performance_with_bufr.png')
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"\n  ✓ Chart saved: regime_performance_with_bufr.png")
+    print(f"  Location: {output_dir}")
+
+
+def plot_threshold_comparison(summary_df: pd.DataFrame, output_dir: str):
+    """
+    Chart: Threshold comparison showing performance by launch month and averages.
+
+    Left panel: Line chart by month for different thresholds
+    Right panel: Bar chart showing average performance by threshold
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import ast
+
+    # Extract threshold values from trigger_params
+    def extract_threshold(params_str):
+        try:
+            params_dict = ast.literal_eval(params_str)
+            return params_dict.get('threshold', None)
+        except:
+            return None
+
+    summary_df_copy = summary_df.copy()
+    summary_df_copy['threshold_value'] = summary_df_copy['trigger_params'].apply(extract_threshold)
+
+    # Filter to cap_utilization_threshold with select_most_recent_launch
+    threshold_data = summary_df_copy[
+        (summary_df_copy['trigger_type'] == 'cap_utilization_threshold') &
+        (summary_df_copy['selection_algo'] == 'select_most_recent_launch') &
+        (summary_df_copy['threshold_value'].notna())
+        ].copy()
+
+    if threshold_data.empty:
+        print("  ⚠ No threshold data found for plotting")
+        return
+
+    # Create figure with 2 subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+    # LEFT PANEL: Line chart by launch month
+    unique_thresholds = sorted(threshold_data['threshold_value'].unique())
+
+    # Color mapping for thresholds
+    color_map = {
+        0.25: '#2ca02c',  # Green
+        0.40: '#17becf',  # Cyan
+        0.50: '#1f77b4',  # Blue
+        0.70: '#bcbd22',  # Yellow-green
+        0.75: '#ff7f0e',  # Orange (recommended)
+        0.90: '#d62728'  # Red (current)
+    }
+
+    for threshold in unique_thresholds:
+        thresh_data = threshold_data[threshold_data['threshold_value'] == threshold]
+
+        # Group by launch month
+        month_data = thresh_data.groupby('launch_month')['vs_bufr_excess'].mean().sort_index()
+
+        color = color_map.get(threshold, '#333333')
+        linewidth = 2.5 if threshold in [0.75, 0.90] else 2
+        alpha = 0.9 if threshold in [0.75, 0.90] else 0.7
+
+        ax1.plot(month_data.index, month_data.values * 100,
+                 marker='o', linewidth=linewidth, markersize=8,
+                 color=color, label=f'{int(threshold * 100)}% Threshold',
+                 alpha=alpha, zorder=10 if threshold == 0.75 else 5)
+
+    ax1.axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.3)
+    ax1.set_xlabel('Launch Month', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('Excess Return vs BUFR (%)', fontsize=12, fontweight='bold')
+    ax1.set_title('Cap Utilization Threshold Performance by Launch Month',
+                  fontsize=14, fontweight='bold')
+    ax1.legend(loc='best', fontsize=9, ncol=2)
+    ax1.grid(True, alpha=0.2)
+
+    # Add annotation box
+    ax1.text(0.02, 0.98, 'Current: 90% (Red)\nRecommended: 75% (Orange)',
+             transform=ax1.transAxes, fontsize=10, verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+
+    # RIGHT PANEL: Average performance bars
+    avg_by_threshold = threshold_data.groupby('threshold_value')['vs_bufr_excess'].mean().sort_index()
+
+    # Color bars based on performance
+    bar_colors = [color_map.get(t, '#333333') for t in avg_by_threshold.index]
+
+    bars = ax2.barh(range(len(avg_by_threshold)), avg_by_threshold.values * 100,
+                    color=bar_colors, alpha=0.8, edgecolor='black', linewidth=1.5)
+
+    ax2.set_yticks(range(len(avg_by_threshold)))
+    ax2.set_yticklabels([f'{int(t * 100)}%' for t in avg_by_threshold.index])
+    ax2.set_xlabel('Average Excess vs BUFR (%)', fontsize=12, fontweight='bold')
+    ax2.set_title('Average Performance by Threshold', fontsize=14, fontweight='bold')
+    ax2.axvline(x=0, color='black', linestyle='--', linewidth=1, alpha=0.3)
+    ax2.grid(True, alpha=0.2, axis='x')
+
+    # Add value labels
+    for bar, val in zip(bars, avg_by_threshold.values * 100):
+        x_pos = val + 0.3 if val > 0 else val - 0.3
+        ha = 'left' if val > 0 else 'right'
+        ax2.text(x_pos, bar.get_y() + bar.get_height() / 2,
+                 f'{val:.1f}%', va='center', ha=ha, fontsize=10, fontweight='bold')
+
+    plt.tight_layout()
+    filepath = os.path.join(output_dir, 'threshold_comparison.png')
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"  ✓ Threshold comparison chart saved")

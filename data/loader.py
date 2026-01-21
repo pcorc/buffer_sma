@@ -6,37 +6,51 @@ Handles loading and initial cleaning of raw data files.
 import pandas as pd
 import numpy as np
 
+# Global configuration: Minimum date for analysis (when BUFR benchmark begins)
+MIN_ANALYSIS_DATE = '2020-07-01'
 
-def load_fund_data(file_path: str, series: str = 'F') -> pd.DataFrame:
+
+def load_fund_data(file_path: str, series: str = 'F', min_date: str = MIN_ANALYSIS_DATE) -> pd.DataFrame:
     """
     Load and preprocess fund data.
 
     Parameters:
       file_path: Path to the CSV file
       series: Fund series to filter (default 'F')
+      min_date: Minimum date to include (default '2020-07-01' when BUFR benchmark begins)
 
     Returns:
-      Preprocessed DataFrame
+      Preprocessed DataFrame filtered to analysis period
     """
     # Load with low_memory=False to handle mixed types
     df = pd.read_csv(file_path, low_memory=False)
     df['Date'] = pd.to_datetime(df['Date'])
+
+    # Filter to analysis period (align with BUFR benchmark availability)
+    min_date_ts = pd.to_datetime(min_date)
+    original_date_range = (df['Date'].min(), df['Date'].max())
+    df = df[df['Date'] >= min_date_ts].copy()
+
+    if len(df) == 0:
+        raise ValueError(f"No data available after {min_date}")
+
+    print(f"  Date filter: {original_date_range[0].date()} to {original_date_range[1].date()} "
+          f"→ {df['Date'].min().date()} to {df['Date'].max().date()}")
 
     df = df.rename(columns={
         'Remaining Cap (%)': 'Remaining Cap',
         'Remaining Cap Net (%)': 'Remaining Cap Net',
         'Remaining Buffer (%)': 'Remaining Buffer',
         'Remaining Buffer Net (%)': 'Remaining Buffer Net',
-        # Add any other columns you want to rename
     })
 
     # Convert numeric columns that might have been read as strings
     numeric_cols = [
         'Fund Value (USD)', 'Fund Return (%)',
         'Reference Asset Value (USD)', 'Reference Asset Return (%)',
-        'Remaining Outcome Days', 'Remaining Cap',  # Note: Updated name
+        'Remaining Outcome Days', 'Remaining Cap',
         'Remaining Cap Net', 'Reference Asset Return to Realize Cap (%)',
-        'Remaining Buffer', 'Remaining Buffer Net',  # Note: Updated names
+        'Remaining Buffer', 'Remaining Buffer Net',
         'Downside Before Buffer (%)', 'Downside Before Buffer Net (%)',
         'Reference Asset to Buffer End (%)', 'Unrealized Option Payoff (%)',
         'Unrealized Option Payoff Net (%)'
@@ -51,31 +65,44 @@ def load_fund_data(file_path: str, series: str = 'F') -> pd.DataFrame:
         original_count = df['Fund'].nunique()
         df = df[df['Fund'].str.startswith(series)].copy()
         filtered_count = df['Fund'].nunique()
-        print(f"  Filtered: {original_count} total funds → {filtered_count} {series}-series funds")
+        print(f"  Series filter: {original_count} total funds → {filtered_count} {series}-series funds")
 
     df = df.sort_values(['Fund', 'Date'])
 
-    # Fix FutureWarning by adding fill_method=None
+    # Calculate daily returns
     df['daily_return'] = df.groupby('Fund')['Fund Value (USD)'].pct_change(fill_method=None).fillna(0)
 
     return df
 
 
-def load_benchmark_data(file_path: str) -> pd.DataFrame:
+def load_benchmark_data(file_path: str, min_date: str = MIN_ANALYSIS_DATE) -> pd.DataFrame:
     """
     Load and preprocess benchmark time series data.
 
     Parameters:
       file_path: Path to the CSV file
+      min_date: Minimum date to include (default '2020-07-01' when BUFR benchmark begins)
 
     Returns:
-      Preprocessed DataFrame
+      Preprocessed DataFrame filtered to analysis period
     """
     df = pd.read_csv(file_path, low_memory=False)
     df['Date'] = pd.to_datetime(df['Date'])
+
+    # Filter to analysis period
+    min_date_ts = pd.to_datetime(min_date)
+    original_date_range = (df['Date'].min(), df['Date'].max())
+    df = df[df['Date'] >= min_date_ts].copy()
+
+    if len(df) == 0:
+        raise ValueError(f"No benchmark data available after {min_date}")
+
+    print(f"  Benchmark date filter: {original_date_range[0].date()} to {original_date_range[1].date()} "
+          f"→ {df['Date'].min().date()} to {df['Date'].max().date()}")
+
     df = df.sort_values('Date')
 
-    # Calculate daily returns for each benchmark with fill_method=None
+    # Calculate daily returns for each benchmark
     for col in ['SPY', 'BUFR']:
         if col in df.columns:
             df[f'{col.lower()}_return'] = df[col].pct_change(fill_method=None).fillna(0)

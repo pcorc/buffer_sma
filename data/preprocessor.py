@@ -7,6 +7,9 @@ import numpy as np
 from pandas.tseries.offsets import BDay
 from config.settings import BUFFER_LEVELS, MONTH_MAP
 
+# Global configuration: Minimum start date for analysis (when BUFR benchmark begins)
+MIN_ANALYSIS_DATE = pd.Timestamp('2020-07-01')
+
 
 def get_fund_month(fund_ticker: str) -> str:
     """
@@ -54,11 +57,16 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
     Uses explicit roll dates from roll_dates.csv with STRICT matching - no inference.
     Captures initial cap values on each annual roll date for 12-month outcome periods.
 
+    ALIGNMENT NOTE: All funds are aligned to start at or after July 2020 (when BUFR
+    benchmark begins). This ensures all simulations are evaluated over the same time
+    period with the same market conditions for valid apples-to-apples comparison.
+
     Key improvements:
+    - Global start date alignment (July 2020+) for all funds
     - Uses exact roll dates only - no "closest date" logic
     - Validates cap values are in reasonable range (10-25%)
-    - Special handling for FAUG (starts Aug 2020, not Nov 2019)
-    - Skips future roll dates beyond available data
+    - No launch date fallback - uses only anniversary dates
+    - Funds with no valid anniversary dates are skipped
 
     Parameters:
       df_raw: Raw fund DataFrame
@@ -80,6 +88,7 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
     print("\n" + "=" * 80)
     print("PREPROCESSING FUND DATA")
     print("=" * 80)
+    print(f"Global alignment: All funds start at or after {MIN_ANALYSIS_DATE.strftime('%Y-%m-%d')}")
 
     df = df_raw.copy()
     df['Date'] = pd.to_datetime(df['Date'])
@@ -118,6 +127,7 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
     # Collect all errors before raising
     missing_date_errors = []
     cap_warnings = []
+    skipped_funds = []
 
     # Process each fund separately
     funds_processed = 0
@@ -131,7 +141,7 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
         series_letter = fund[0]
         buffer_level = BUFFER_LEVELS.get(series_letter, 0.10)
 
-        # Get fund's first date (launch date)
+        # Get fund's date range
         launch_date = fund_df['Date'].min()
         fund_end_date = fund_df['Date'].max()
 
@@ -140,21 +150,22 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
             anniversary_dates = get_anniversary_roll_dates(fund, monthly_roll_dates)
         except ValueError as e:
             print(f"  ⚠️  Skipping fund {fund}: {e}")
+            skipped_funds.append(fund)
             continue
 
-        # Special handling for FAUG - start in August 2020, not Nov 2019
-        if fund == 'FAUG':
-            print(f"  ℹ️  {fund}: Applying special start date (Aug 2020 instead of Nov 2019)")
-            anniversary_dates = [d for d in anniversary_dates if d >= pd.Timestamp('2020-08-01')]
+        # GLOBAL ALIGNMENT: Filter anniversary dates to >= MIN_ANALYSIS_DATE
+        # This ensures all funds start in the same time period for valid comparison
+        anniversary_dates = [d for d in anniversary_dates if d >= MIN_ANALYSIS_DATE]
 
-        # Filter anniversary dates to those >= launch_date
-        anniversary_dates = [d for d in anniversary_dates if d >= launch_date]
+        # If no valid anniversary dates after filtering, skip this fund
+        if not anniversary_dates:
+            print(f"  ℹ️  {fund}: No anniversary dates >= {MIN_ANALYSIS_DATE.strftime('%Y-%m-%d')}, skipping fund")
+            skipped_funds.append(fund)
+            continue
 
-        # For first period: use launch date if before first anniversary (except FAUG)
-        if fund != 'FAUG' and (not anniversary_dates or launch_date < anniversary_dates[0]):
-            roll_dates_for_fund = [launch_date] + anniversary_dates
-        else:
-            roll_dates_for_fund = anniversary_dates
+        # Use only anniversary dates (no launch date fallback)
+        # This ensures alignment - all funds start on their roll dates
+        roll_dates_for_fund = anniversary_dates
 
         # Process each outcome period with STRICT date matching
         for period_idx, roll_date in enumerate(roll_dates_for_fund):
@@ -219,7 +230,7 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
 
             period_indices = fund_df[period_mask].index
 
-            # Assign metrics to entire period (no variation check needed)
+            # Assign metrics to entire period
             if len(period_indices) > 0:
                 df.loc[period_indices, 'Roll_Date'] = actual_roll_date
                 df.loc[period_indices, 'Outcome_Period_ID'] = f"{fund}_P{period_id}"
@@ -242,7 +253,13 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
     df['Cap_Remaining_Pct'] = df['Current_Remaining_Cap'] / df['Original_Cap']
     df['Cap_Remaining_Pct'] = df['Cap_Remaining_Pct'].fillna(1).clip(lower=0, upper=1)
 
-    # Print all warnings
+    # Print summary
+    if skipped_funds:
+        print(f"\n⚠️  SKIPPED FUNDS ({len(skipped_funds)} funds):")
+        for fund in skipped_funds:
+            print(f"  • {fund}")
+
+    # Print all cap warnings
     if cap_warnings:
         print(f"\n⚠️  CAP RANGE WARNINGS ({len(cap_warnings)} found):")
         for warning in cap_warnings:
@@ -261,6 +278,7 @@ def preprocess_fund_data(df_raw: pd.DataFrame, roll_dates_dict: dict) -> pd.Data
 
     print(f"\n✅ Preprocessing complete - processed {funds_processed} funds")
     print(f"  Created {df['Outcome_Period_ID'].nunique()} outcome periods")
+    print(f"  All funds start >= {MIN_ANALYSIS_DATE.strftime('%Y-%m-%d')}")
     print("=" * 80 + "\n")
 
     return df

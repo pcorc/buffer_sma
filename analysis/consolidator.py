@@ -273,3 +273,45 @@ def summarize_by_month_and_regime(summary_df, regime_df):
     month_regime_summary = month_regime_summary.reset_index()
 
     return month_regime_summary
+
+
+def analyze_threshold_buckets(summary_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Analyze cap utilization thresholds in bucketed ranges.
+
+    Returns DataFrame with ranges: 0-50%, 50-75%, 75-90%, 90-100%
+    """
+
+    def assign_bucket(thresh):
+        if pd.isna(thresh):
+            return None
+        if thresh <= 0.50:
+            return '0-50%'
+        elif thresh <= 0.75:
+            return '50-75%'
+        elif thresh <= 0.90:
+            return '75-90%'
+        else:
+            return '90-100%'
+
+    # Extract threshold from trigger_params
+    import ast
+    def extract_threshold(params_str):
+        try:
+            params_dict = ast.literal_eval(params_str)
+            return params_dict.get('threshold', None)
+        except:
+            return None
+
+    summary_df_copy = summary_df.copy()
+    summary_df_copy['threshold_value'] = summary_df_copy['trigger_params'].apply(extract_threshold)
+    summary_df_copy['threshold_bucket'] = summary_df_copy['threshold_value'].apply(assign_bucket)
+
+    # Aggregate by bucket
+    bucket_stats = summary_df_copy.groupby('threshold_bucket').agg({
+        'vs_bufr_excess': ['mean', 'median'],
+        'strategy_sharpe': 'mean',
+        'num_trades': 'mean'
+    }).round(4)
+
+    return bucket_stats

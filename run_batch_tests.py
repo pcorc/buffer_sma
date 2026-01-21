@@ -16,7 +16,13 @@ Each batch takes ~15 minutes and tests specific strategy types.
 import os
 import sys
 from datetime import datetime
-
+from visualization.performance_plots import (
+    create_all_plots, plot_threshold_comparison,
+    plot_regime_performance_with_bufr  # Add this line
+)
+from visualization.batch_performance_plots import (
+    create_all_batch_plots,
+)
 # Add project root to path
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
@@ -27,8 +33,43 @@ sys.path.insert(0, project_root)
 
 BATCH_NUMBER = 0  # Change this to run different batches (1-6)
 
-
+# TESTER
 def get_batch_0_configs():
+    """
+    BATCH 0: Threshold Testing - Cap Utilization Analysis
+    Tests: 6 thresholds × 12 months = 72 simulations
+    Estimated time: ~22 minutes
+
+    Purpose: Identify optimal cap utilization threshold for switching funds.
+    Tests thresholds: 25%, 40%, 50%, 70%, 75%, 90%
+    Compares current 90% threshold against alternatives.
+
+    Generates:
+    - Threshold comparison chart (line + bar)
+    - Regime performance analysis
+    """
+    configs = []
+
+    # Test these specific thresholds
+    threshold_levels = [0.25, 0.40, 0.75, 0.90]
+
+    # All launch months for fair comparison
+    months = ['FEB', 'MAR', 'MAY', 'JUN',
+              'JUL', 'AUG', 'SEP', 'NOV', 'DEC']
+
+    months = ['SEP',]
+
+    for threshold in threshold_levels:
+        configs.append({
+            'trigger_type': 'cap_utilization_threshold',
+            'trigger_params': {'threshold': threshold},
+            'selection_func_name': 'select_most_recent_launch',
+            'launch_months': months
+        })
+
+    return configs
+
+def get_batch_bearish_configs():
     """
     BATCH 0: Quick Test - 6 Strategies (3 Bullish + 3 Bearish)
     ~24 simulations, ~7 minutes
@@ -37,7 +78,8 @@ def get_batch_0_configs():
     """
     configs = []
 
-    months = ['MAR']
+    months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+                 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
 
     # # BULLISH STRATEGIES (3)
     # configs.append({
@@ -295,7 +337,39 @@ def get_batch_4_configs():
 
     return configs
 
+# AUSTIN SCHULTZ CURRENT
+def get_batch_6_configs():
+    """
+    BATCH 6: Cap Utilization Extended Thresholds (60%, 70%, 80%, 90%)
+    ~80 simulations, ~24 minutes
 
+    Tests higher cap utilization thresholds to find optimal switching points
+    """
+    configs = []
+
+    thresholds = [0.60, 0.70, 0.80, 0.90]
+    months = ['MAR', 'JUN', 'SEP', 'DEC']
+
+    selections = [
+        'select_most_recent_launch',
+        'select_remaining_cap_highest',
+        'select_remaining_cap_lowest',
+        'select_cap_utilization_lowest',
+        'select_cap_utilization_highest',
+    ]
+
+    for threshold in thresholds:
+        for selection in selections:
+            configs.append({
+                'trigger_type': 'cap_utilization_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'launch_months': months
+            })
+
+    return configs
+
+# ALL
 def get_comprehensive_regime_batch_configs():
     """
     COMPREHENSIVE BATCH: Optimized for Finding Best Strategy per Regime
@@ -463,7 +537,7 @@ def get_comprehensive_regime_batch_configs():
 
     # GROUP 3D: Zero-Threshold Triggers (6 sims)
     # Strategy: React to any directional move
-    for selection in ['select_cap_utilization_lowest', 'select_remaining_cap_highest', 'select_downside_buffer_highest']:
+    for selection in ['select_downside_buffer_highest']:
         configs.append({
             'trigger_type': 'ref_asset_return_threshold',
             'trigger_params': {'threshold': 0.0},
@@ -474,7 +548,7 @@ def get_comprehensive_regime_batch_configs():
 
     return configs
 
-
+# ALL CALLER
 def get_batch_5_configs():
     """
     BATCH 5: Comprehensive Regime-Optimized Testing
@@ -498,7 +572,8 @@ BATCH_CONFIGS = {
     2: get_batch_2_configs,
     3: get_batch_3_configs,
     4: get_batch_4_configs,
-    5: get_batch_5_configs  # ← ADD THIS
+    5: get_batch_5_configs,
+    6: get_batch_6_configs  # ← ADD THIS
 }
 
 BATCH_DESCRIPTIONS = {
@@ -507,7 +582,8 @@ BATCH_DESCRIPTIONS = {
     2: "Cap Utilization Tactical",
     3: "Remaining Cap Tactical",
     4: "Market-Responsive (Ref Asset + Buffer)",
-    5: "Comprehensive Regime-Optimized (180 sims, 6 months, expanded thresholds)"  # ← ADD THIS
+    5: "Comprehensive Regime-Optimized (180 sims, 6 months, expanded thresholds)",
+    6: "Cap Utilization Extended (60-90% thresholds)"  # ← ADD THIS
 }
 
 # ============================================================================
@@ -681,8 +757,7 @@ def main():
     print("GENERATING VISUALIZATIONS")
     print("=" * 80)
 
-    from visualization.batch_performance_plots import create_all_batch_plots
-
+    # Generate standard batch plots
     create_all_batch_plots(
         results_list=results_list,
         summary_df=summary_df,
@@ -690,6 +765,29 @@ def main():
         optimal_6m=optimal_3m,  # Use 3M as primary analysis
         output_dir=output_dir
     )
+
+    # If this is Batch 0 (threshold testing), generate special charts
+    if BATCH_NUMBER == 0:
+        # Generate threshold and regime charts (works for any batch with optimal strategies)
+        if optimal_3m and ('bull' in optimal_3m or 'bear' in optimal_3m):
+            print("\nGenerating additional performance charts...")
+
+            # Threshold comparison (only if cap_utilization_threshold strategies exist)
+            if any(summary_df['trigger_type'] == 'cap_utilization_threshold'):
+                plot_threshold_comparison(
+                    summary_df=summary_df,
+                    output_dir=output_dir
+                )
+
+            # Regime performance comparison (if we have both bullish and defensive strategies)
+            if not future_regime_df.empty:
+                plot_regime_performance_with_bufr(
+                    future_regime_df=future_regime_df,
+                    optimal_strategies=optimal_3m,
+                    output_dir=output_dir
+                )
+
+        print(f"\n  ✓ All visualizations saved to: {output_dir}")
 
     # ========================================================================
     # END PLOTTING

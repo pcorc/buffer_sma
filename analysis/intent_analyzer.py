@@ -474,3 +474,30 @@ def validate_intent_performance(
         validation['bearish_in_bear'] = bearish_bear_return >= avg_bear_return
 
     return validation
+
+
+def select_best_by_intent_two_strategies(
+        summary_df: pd.DataFrame,
+        regime_df: pd.DataFrame = None
+) -> pd.DataFrame:
+    """
+    Select best strategy for bullish and defensive only (2 strategies).
+
+    Returns:
+        DataFrame with 2 rows (bullish and defensive)
+    """
+    best_strategies = []
+
+    intent_groups = create_intent_groups(summary_df)
+
+    # BULLISH
+    if 'bullish' in intent_groups and not intent_groups['bullish'].empty:
+        bullish = intent_groups['bullish'].nlargest(1, 'vs_bufr_excess').iloc[0]
+        best_strategies.append(bullish.to_dict())
+
+    # DEFENSIVE (use bearish intent, select by best Sharpe)
+    if 'bearish' in intent_groups and not intent_groups['bearish'].empty:
+        defensive = intent_groups['bearish'].nlargest(1, 'strategy_sharpe').iloc[0]
+        best_strategies.append(defensive.to_dict())
+
+    return pd.DataFrame(best_strategies)

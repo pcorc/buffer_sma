@@ -48,6 +48,17 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         return None
 
     start_date = fund_data['Date'].min()
+    BUFR_INCEPTION = pd.Timestamp('2020-07-01')
+
+    # Start at the later of: fund launch OR BUFR inception
+    fund_launch = fund_data['Date'].min()
+    start_date = max(fund_launch, BUFR_INCEPTION)
+
+    # If start_date is before the fund's actual launch month, advance to next occurrence
+    if start_date < fund_launch:
+        start_date = fund_launch
+
+
     end_date = fund_data['Date'].max()
 
     print(f"Period: {start_date.date()} to {end_date.date()}")
