@@ -662,8 +662,6 @@ def export_main_consolidated_workbook(
 
     print(f"\n{'=' * 80}")
     print(f"EXPORTING CONSOLIDATED WORKBOOK")
-    print(f"{'=' * 80}")
-    print(f"Creating: {filename}")
 
     # Header formatting
     header_fill = PatternFill(start_color='366092', end_color='366092', fill_type='solid')
@@ -690,7 +688,6 @@ def export_main_consolidated_workbook(
         summary_export.to_excel(writer, sheet_name='Summary', index=False)
         _format_sheet(writer.sheets['Summary'], header_fill, header_font)
         tab_count += 1
-        print(f"  ✓ Tab {tab_count}: Summary ({len(summary_export)} iterations)")
 
         # =====================================================================
         # TAB 2: FUTURE REGIME ANALYSIS (6M)
@@ -702,7 +699,6 @@ def export_main_consolidated_workbook(
             future_export.to_excel(writer, sheet_name='Future Regime Analysis', index=False)
             _format_sheet(writer.sheets['Future Regime Analysis'], header_fill, header_font)
             tab_count += 1
-            print(f"  ✓ Tab {tab_count}: Future Regime Analysis ({len(future_export)} records)")
 
         # =====================================================================
         # TABS 3-5: OPTIMAL STRATEGIES BY REGIME (6M)
@@ -718,7 +714,6 @@ def export_main_consolidated_workbook(
                     regime_optimal.to_excel(writer, sheet_name=sheet_name, index=False)
                     _format_sheet(writer.sheets[sheet_name], header_fill, header_font)
                     tab_count += 1
-                    print(f"  ✓ Tab {tab_count}: {sheet_name} ({len(regime_optimal)} strategies)")
 
         # =====================================================================
         # TABS 6-8: OPTIMAL STRATEGIES BY REGIME (3M)
@@ -734,7 +729,6 @@ def export_main_consolidated_workbook(
                     regime_optimal.to_excel(writer, sheet_name=sheet_name, index=False)
                     _format_sheet(writer.sheets[sheet_name], header_fill, header_font)
                     tab_count += 1
-                    print(f"  ✓ Tab {tab_count}: {sheet_name} ({len(regime_optimal)} strategies)")
 
         # =====================================================================
         # TAB: INTENT VS FUTURE REGIME (6M)
@@ -746,7 +740,6 @@ def export_main_consolidated_workbook(
             intent_export.to_excel(writer, sheet_name='Intent vs Future (6M)', index=False)
             _format_sheet(writer.sheets['Intent vs Future (6M)'], header_fill, header_font)
             tab_count += 1
-            print(f"  ✓ Tab {tab_count}: Intent vs Future (6M)")
 
         # =====================================================================
         # TAB: INTENT VS FUTURE REGIME (3M)
@@ -758,7 +751,6 @@ def export_main_consolidated_workbook(
             intent_export.to_excel(writer, sheet_name='Intent vs Future (3M)', index=False)
             _format_sheet(writer.sheets['Intent vs Future (3M)'], header_fill, header_font)
             tab_count += 1
-            print(f"  ✓ Tab {tab_count}: Intent vs Future (3M)")
 
         # =====================================================================
         # TAB: ROBUST STRATEGIES (6M)
@@ -770,7 +762,6 @@ def export_main_consolidated_workbook(
             robust_export.to_excel(writer, sheet_name='Robust Strategies (6M)', index=False)
             _format_sheet(writer.sheets['Robust Strategies (6M)'], header_fill, header_font)
             tab_count += 1
-            print(f"  ✓ Tab {tab_count}: Robust Strategies (6M) ({len(robust_export)} strategies)")
 
         # =====================================================================
         # TAB: ROBUST STRATEGIES (3M)
@@ -782,7 +773,6 @@ def export_main_consolidated_workbook(
             robust_export.to_excel(writer, sheet_name='Robust Strategies (3M)', index=False)
             _format_sheet(writer.sheets['Robust Strategies (3M)'], header_fill, header_font)
             tab_count += 1
-            print(f"  ✓ Tab {tab_count}: Robust Strategies (3M) ({len(robust_export)} strategies)")
 
         # =====================================================================
         # TAB: RANKED BY VS BUFR (6M)
@@ -794,7 +784,6 @@ def export_main_consolidated_workbook(
             ranked_export.to_excel(writer, sheet_name='Ranked vs BUFR (6M)', index=False)
             _format_sheet(writer.sheets['Ranked vs BUFR (6M)'], header_fill, header_font)
             tab_count += 1
-            print(f"  ✓ Tab {tab_count}: Ranked vs BUFR (6M)")
 
         # =====================================================================
         # TAB: RANKED BY VS SPY (6M)
@@ -806,7 +795,6 @@ def export_main_consolidated_workbook(
             ranked_export.to_excel(writer, sheet_name='Ranked vs SPY (6M)', index=False)
             _format_sheet(writer.sheets['Ranked vs SPY (6M)'], header_fill, header_font)
             tab_count += 1
-            print(f"  ✓ Tab {tab_count}: Ranked vs SPY (6M)")
 
         # =====================================================================
         # ORIGINAL ANALYSIS TABS
@@ -819,7 +807,6 @@ def export_main_consolidated_workbook(
             regime_export.to_excel(writer, sheet_name='Current Regime Analysis', index=False)
             _format_sheet(writer.sheets['Current Regime Analysis'], header_fill, header_font)
             tab_count += 1
-            print(f"  ✓ Tab {tab_count}: Current Regime Analysis")
 
         if capture_ratios is not None and not capture_ratios.empty:
             capture_export = capture_ratios.copy()
@@ -828,7 +815,6 @@ def export_main_consolidated_workbook(
             capture_export.to_excel(writer, sheet_name='Capture Ratios', index=False)
             _format_sheet(writer.sheets['Capture Ratios'], header_fill, header_font)
             tab_count += 1
-            print(f"  ✓ Tab {tab_count}: Capture Ratios")
 
         if trigger_summary is not None and not trigger_summary.empty:
             trigger_export = trigger_summary.copy()
@@ -837,7 +823,6 @@ def export_main_consolidated_workbook(
             trigger_export.to_excel(writer, sheet_name='By Trigger Type', index=False)
             _format_sheet(writer.sheets['By Trigger Type'], header_fill, header_font)
             tab_count += 1
-            print(f"  ✓ Tab {tab_count}: By Trigger Type")
 
         if selection_summary is not None and not selection_summary.empty:
             selection_export = selection_summary.copy()
@@ -846,7 +831,6 @@ def export_main_consolidated_workbook(
             selection_export.to_excel(writer, sheet_name='By Selection Algo', index=False)
             _format_sheet(writer.sheets['By Selection Algo'], header_fill, header_font)
             tab_count += 1
-            print(f"  ✓ Tab {tab_count}: By Selection Algo")
 
         if month_summary is not None and not month_summary.empty:
             month_export = month_summary.copy()
@@ -855,11 +839,7 @@ def export_main_consolidated_workbook(
             month_export.to_excel(writer, sheet_name='By Launch Month', index=False)
             _format_sheet(writer.sheets['By Launch Month'], header_fill, header_font)
             tab_count += 1
-            print(f"  ✓ Tab {tab_count}: By Launch Month")
 
-    print(f"\n✅ Workbook created with {tab_count} tabs")
-    print(f"   Location: {filepath}")
-    print(f"{'=' * 80}\n")
 
     return filepath
 

@@ -16,13 +16,23 @@ Each batch takes ~15 minutes and tests specific strategy types.
 import os
 import sys
 from datetime import datetime
-from visualization.performance_plots import (
-    create_all_plots, plot_threshold_comparison,
-    plot_regime_performance_with_bufr  # Add this line
+
+# Generate all relevant plots based on batch type and data
+from visualization.performance_plots import generate_batch_visualizations
+# Import and run
+from config import settings
+from data.loader import load_fund_data, load_benchmark_data, load_roll_dates
+from data.preprocessor import preprocess_fund_data
+from core.regime_classifier import classify_market_regimes
+from core.forward_regime_classifier import classify_forward_regimes
+from backtesting.batch_runner import run_all_single_ticker_tests
+from analysis.consolidator import consolidate_results
+from analysis.forward_regime_analyzer import (
+    analyze_by_future_regime, summarize_optimal_strategies
 )
-from visualization.batch_performance_plots import (
-    create_all_batch_plots,
-)
+from utils.excel_exporter import export_main_consolidated_workbook
+from utils.validators import validate_fund_data, validate_benchmark_data, validate_roll_dates
+
 # Add project root to path
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
@@ -34,6 +44,7 @@ sys.path.insert(0, project_root)
 BATCH_NUMBER = 0  # Change this to run different batches (1-6)
 
 # TESTER
+# AUSTIN SCHULTZ CURRENT
 def get_batch_0_configs():
     """
     BATCH 0: Threshold Testing - Cap Utilization Analysis
@@ -69,7 +80,8 @@ def get_batch_0_configs():
 
     return configs
 
-def get_batch_bearish_configs():
+# random
+def get_batch_7_configs():
     """
     BATCH 0: Quick Test - 6 Strategies (3 Bullish + 3 Bearish)
     ~24 simulations, ~7 minutes
@@ -78,8 +90,7 @@ def get_batch_bearish_configs():
     """
     configs = []
 
-    months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-                 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+    months = ['JAN', 'OCT',]
 
     # # BULLISH STRATEGIES (3)
     # configs.append({
@@ -337,38 +348,6 @@ def get_batch_4_configs():
 
     return configs
 
-# AUSTIN SCHULTZ CURRENT
-def get_batch_6_configs():
-    """
-    BATCH 6: Cap Utilization Extended Thresholds (60%, 70%, 80%, 90%)
-    ~80 simulations, ~24 minutes
-
-    Tests higher cap utilization thresholds to find optimal switching points
-    """
-    configs = []
-
-    thresholds = [0.60, 0.70, 0.80, 0.90]
-    months = ['MAR', 'JUN', 'SEP', 'DEC']
-
-    selections = [
-        'select_most_recent_launch',
-        'select_remaining_cap_highest',
-        'select_remaining_cap_lowest',
-        'select_cap_utilization_lowest',
-        'select_cap_utilization_highest',
-    ]
-
-    for threshold in thresholds:
-        for selection in selections:
-            configs.append({
-                'trigger_type': 'cap_utilization_threshold',
-                'trigger_params': {'threshold': threshold},
-                'selection_func_name': selection,
-                'launch_months': months
-            })
-
-    return configs
-
 # ALL
 def get_comprehensive_regime_batch_configs():
     """
@@ -573,7 +552,7 @@ BATCH_CONFIGS = {
     3: get_batch_3_configs,
     4: get_batch_4_configs,
     5: get_batch_5_configs,
-    6: get_batch_6_configs  # ← ADD THIS
+    7: get_batch_7_configs  # ← ADD THIS
 }
 
 BATCH_DESCRIPTIONS = {
@@ -583,7 +562,7 @@ BATCH_DESCRIPTIONS = {
     3: "Remaining Cap Tactical",
     4: "Market-Responsive (Ref Asset + Buffer)",
     5: "Comprehensive Regime-Optimized (180 sims, 6 months, expanded thresholds)",
-    6: "Cap Utilization Extended (60-90% thresholds)"  # ← ADD THIS
+    7: "Random Assortment"  # ← ADD THIS
 }
 
 # ============================================================================
@@ -614,20 +593,6 @@ def main():
     print("\n" + "-" * 80)
     input("Press ENTER to start batch execution...")
     print("-" * 80 + "\n")
-
-    # Import and run
-    from config import settings
-    from data.loader import load_fund_data, load_benchmark_data, load_roll_dates
-    from data.preprocessor import preprocess_fund_data
-    from core.regime_classifier import classify_market_regimes
-    from core.forward_regime_classifier import classify_forward_regimes
-    from backtesting.batch_runner import run_all_single_ticker_tests
-    from analysis.consolidator import consolidate_results
-    from analysis.forward_regime_analyzer import (
-        analyze_by_future_regime, summarize_optimal_strategies
-    )
-    from utils.excel_exporter import export_main_consolidated_workbook
-    from utils.validators import validate_fund_data, validate_benchmark_data, validate_roll_dates
 
     start_time = datetime.now()
 
@@ -702,10 +667,7 @@ def main():
     )
 
     if not future_regime_df.empty:
-        # Analyze 3M horizon
         optimal_3m = summarize_optimal_strategies(future_regime_df, horizon='3M', top_n=10)
-
-        # Analyze 6M horizon (from SAME backtest data)
         optimal_6m = summarize_optimal_strategies(future_regime_df, horizon='6M', top_n=10)
     else:
         optimal_3m = {}
@@ -757,37 +719,14 @@ def main():
     print("GENERATING VISUALIZATIONS")
     print("=" * 80)
 
-    # Generate standard batch plots
-    create_all_batch_plots(
+    generate_batch_visualizations(
         results_list=results_list,
         summary_df=summary_df,
         future_regime_df=future_regime_df,
-        optimal_6m=optimal_3m,  # Use 3M as primary analysis
-        output_dir=output_dir
+        optimal_strategies=optimal_3m,
+        output_dir=output_dir,
+        batch_number=BATCH_NUMBER
     )
-
-    # If this is Batch 0 (threshold testing), generate special charts
-    if BATCH_NUMBER == 0:
-        # Generate threshold and regime charts (works for any batch with optimal strategies)
-        if optimal_3m and ('bull' in optimal_3m or 'bear' in optimal_3m):
-            print("\nGenerating additional performance charts...")
-
-            # Threshold comparison (only if cap_utilization_threshold strategies exist)
-            if any(summary_df['trigger_type'] == 'cap_utilization_threshold'):
-                plot_threshold_comparison(
-                    summary_df=summary_df,
-                    output_dir=output_dir
-                )
-
-            # Regime performance comparison (if we have both bullish and defensive strategies)
-            if not future_regime_df.empty:
-                plot_regime_performance_with_bufr(
-                    future_regime_df=future_regime_df,
-                    optimal_strategies=optimal_3m,
-                    output_dir=output_dir
-                )
-
-        print(f"\n  ✓ All visualizations saved to: {output_dir}")
 
     # ========================================================================
     # END PLOTTING
@@ -801,12 +740,6 @@ def main():
     print(f"{'=' * 80}")
     print(f"Duration: {duration}")
     print(f"Total simulations: {len(results_list)}")
-    print(f"Output: {workbook_path}")
-    print(f"\n{'=' * 80}")
-    print(f"NEXT STEPS:")
-    print(f"1. Review {workbook_path}")
-    print(f"2. Check 'Optimal-Bull (6M)', 'Optimal-Bear (6M)', 'Optimal-Neutral (6M)' tabs")
-    print(f"3. Set BATCH_NUMBER = {BATCH_NUMBER + 1} and run again")
     print(f"{'=' * 80}\n")
 
 

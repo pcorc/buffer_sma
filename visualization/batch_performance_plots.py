@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+
 from datetime import datetime
 import os
 
@@ -92,8 +93,6 @@ def plot_1_all_strategies_with_best(results_list, summary_df, output_dir):
     - Best bearish (thick dark red)
     - Benchmarks (gray dashed)
     """
-    print("\nGenerating Plot 1: All Strategies with Best Highlighted...")
-
     fig, ax = plt.subplots(figsize=(16, 9))
 
     # Find best strategies
@@ -185,8 +184,6 @@ def plot_1_all_strategies_with_best(results_list, summary_df, output_dir):
     # Show in PyCharm
     plt.show()
 
-    print(f"  ✓ Saved: {filename}")
-
     return filepath
 
 
@@ -198,10 +195,7 @@ def plot_2_best_comparison(results_list, summary_df, output_dir):
     - Multiple intents (shows best of each)
     - Single intent (shows top 2-3 by different criteria)
     """
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
 
-    print("\nGenerating Plot 2: Best Strategy Comparison...")
 
     if summary_df.empty:
         print("  ⚠ No data for Plot 2")
@@ -335,9 +329,6 @@ def plot_2_best_comparison(results_list, summary_df, output_dir):
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print(f"  ✓ Saved: {filename}")
-
-
 
 def plot_3_strategy_selection_by_forecast(results_list, summary_df, future_regime_df, optimal_6m, output_dir):
     """
@@ -345,7 +336,6 @@ def plot_3_strategy_selection_by_forecast(results_list, summary_df, future_regim
 
     Shows which strategies perform best when entering different market regimes.
     """
-    print("\nGenerating Plot 3: Best by Forward Regime...")
 
     if not optimal_6m or future_regime_df.empty:
         print("  ⚠ Skipping - no forward regime data available")
@@ -417,8 +407,6 @@ def plot_3_strategy_selection_by_forecast(results_list, summary_df, future_regim
 
     # Show in PyCharm
     plt.show()
-
-    print(f"  ✓ Saved: {filename}")
 
     return filepath
 

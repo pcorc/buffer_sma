@@ -40,8 +40,6 @@ def analyze_by_future_regime(results_list, df_forward_regimes, entry_frequency='
 
     print("\n" + "=" * 80)
     print("ANALYZING PERFORMANCE BY FUTURE REGIME (MULTIPLE ENTRY POINTS)")
-    print("=" * 80)
-    print(f"Entry frequency: {entry_frequency}")
 
     future_regime_records = []
     total_entries = 0
@@ -157,15 +155,6 @@ def analyze_by_future_regime(results_list, df_forward_regimes, entry_frequency='
             future_regime_records.append(record)
 
     future_regime_df = pd.DataFrame(future_regime_records)
-
-    print(f"\n✅ Analyzed {len(future_regime_df)} total entry points across {len(results_list)} strategies")
-    print(f"   Valid entries: {len(future_regime_df)}")
-    print(f"   Skipped entries: {skipped_entries}")
-
-    if not future_regime_df.empty:
-        print(f"\n   Entries per strategy (avg): {len(future_regime_df) / len(results_list):.1f}")
-        print(f"\n   Regime distribution (6M):")
-        print(f"   {future_regime_df['future_regime_6m'].value_counts()}")
 
     print("=" * 80 + "\n")
 
