@@ -25,47 +25,110 @@ sys.path.insert(0, project_root)
 # CONFIGURATION: SELECT BATCH TO RUN
 # ============================================================================
 
-BATCH_NUMBER = 1  # Change this to run different batches (1-6)
+BATCH_NUMBER = 0  # Change this to run different batches (1-6)
 
+
+def get_batch_0_configs():
+    """
+    BATCH 0: Quick Test - 6 Strategies (3 Bullish + 3 Bearish)
+    ~24 simulations, ~7 minutes
+
+    Used to verify regime classification and Excel export tabs
+    """
+    configs = []
+
+    months = ['MAR','DEC']
+
+    # # BULLISH STRATEGIES (3)
+    # configs.append({
+    #     'trigger_type': 'rebalance_time_period',
+    #     'trigger_params': {'frequency': 'quarterly'},
+    #     'selection_func_name': 'select_cap_utilization_lowest',  # Bullish
+    #     'launch_months': months
+    # })
+    #
+    # configs.append({
+    #     'trigger_type': 'cap_utilization_threshold',
+    #     'trigger_params': {'threshold': 0.75},
+    #     'selection_func_name': 'select_remaining_cap_highest',  # Bullish
+    #     'launch_months': months
+    # })
+    #
+    # configs.append({
+    #     'trigger_type': 'remaining_cap_threshold',
+    #     'trigger_params': {'threshold': 0.50},
+    #     'selection_func_name': 'select_downside_buffer_lowest',  # Bullish
+    #     'launch_months': months
+    # })
+
+    # BEARISH STRATEGIES (3)
+    configs.append({
+        'trigger_type': 'rebalance_time_period',
+        'trigger_params': {'frequency': 'quarterly'},
+        'selection_func_name': 'select_downside_buffer_highest',  # Bearish
+        'launch_months': months
+    })
+
+    configs.append({
+        'trigger_type': 'cap_utilization_threshold',
+        'trigger_params': {'threshold': 0.75},
+        'selection_func_name': 'select_downside_buffer_lowest',  # Bearish (overlaps with bullish)
+        'launch_months': months
+    })
+
+    # configs.append({
+    #     'trigger_type': 'remaining_cap_threshold',
+    #     'trigger_params': {'threshold': 0.50},
+    #     'selection_func_name': 'select_cap_utilization_lowest',  # Bearish (overlaps with bullish)
+    #     'launch_months': months
+    # })
+
+    return configs
 
 # ============================================================================
 # BATCH DEFINITIONS
 # ============================================================================
-
 def get_batch_1_configs():
     """
-    BATCH 1: Time-Based Rebalancing (Neutral Strategies)
+    BATCH 1: Time-Based Systematic Rebalancing
     ~48 simulations, ~15 minutes
 
-    Tests: Monthly, Quarterly, Semi-Annual, Annual rebalancing
-    Launch Months: Quarterly (MAR, JUN, SEP, DEC)
-    Selections: 4 selection algorithms
-    Intent: Neutral (systematic rebalancing)
+    Tests systematic rebalancing with bullish vs bearish selection intent
     """
     configs = []
 
-    frequencies = [
-        ('monthly', ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN']),
-        ('quarterly', ['MAR', 'JUN', 'SEP', 'DEC']),
-        ('semi_annual', ['MAR', 'SEP']),
-        ('annual', ['JAN'])
+    frequencies = ['quarterly', 'semi_annual', 'annual']
+    months = ['MAR', 'JUN', 'SEP', 'DEC']
+
+    bullish_selections = [
+        'select_cap_utilization_lowest',
+        'select_remaining_cap_highest',
+        'select_downside_buffer_lowest'
     ]
 
-    selections = [
-        'select_most_recent_launch',
-        'select_remaining_cap',
-        'select_cap_utilization',
-        'select_highest_outcome_and_cap'
+    bearish_selections = [
+        'select_downside_buffer_highest',
+        'select_downside_buffer_lowest',
+        'select_cap_utilization_lowest'
     ]
 
-    for freq, months in frequencies:
-        for selection in selections:
+    for freq in frequencies:
+        # Bullish strategies
+        for selection in bullish_selections:
             configs.append({
                 'trigger_type': 'rebalance_time_period',
                 'trigger_params': {'frequency': freq},
                 'selection_func_name': selection,
-                'launch_months': months,
-                'strategy_intent': 'neutral'
+                'launch_months': months
+            })
+
+        # Bearish strategies
+        for selection in bearish_selections:
+            configs.append({
+                'trigger_type': 'rebalance_time_period',
+                'trigger_params': {'frequency': freq},
+                'selection_func_name': selection,
+                'launch_months': months
             })
 
     return configs
@@ -73,34 +136,45 @@ def get_batch_1_configs():
 
 def get_batch_2_configs():
     """
-    BATCH 2: Cap Utilization Thresholds (Bearish/Defensive)
+    BATCH 2: Cap Utilization Tactical Triggers
     ~48 simulations, ~15 minutes
 
-    Tests: Cap utilization 25%, 50%, 75%, 90%
-    Launch Months: Quarterly (MAR, JUN, SEP, DEC)
-    Selections: 4 selection algorithms
-    Intent: Bearish (preserve protection)
+    Tests rotation based on cap consumption
     """
     configs = []
 
-    thresholds = [0.25, 0.50, 0.75, 0.90]
+    thresholds = [0.50, 0.75]
     months = ['MAR', 'JUN', 'SEP', 'DEC']
 
-    selections = [
-        'select_most_recent_launch',
-        'select_remaining_cap',
-        'select_cap_utilization',
-        'select_highest_outcome_and_cap'
+    bullish_selections = [
+        'select_cap_utilization_lowest',
+        'select_remaining_cap_highest',
+        'select_downside_buffer_lowest'
+    ]
+
+    bearish_selections = [
+        'select_downside_buffer_highest',
+        'select_downside_buffer_lowest',
+        'select_cap_utilization_lowest'
     ]
 
     for threshold in thresholds:
-        for selection in selections:
+        # Bullish strategies
+        for selection in bullish_selections:
             configs.append({
                 'trigger_type': 'cap_utilization_threshold',
                 'trigger_params': {'threshold': threshold},
                 'selection_func_name': selection,
-                'launch_months': months,
-                'strategy_intent': 'bearish'
+                'launch_months': months
+            })
+
+        # Bearish strategies
+        for selection in bearish_selections:
+            configs.append({
+                'trigger_type': 'cap_utilization_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'launch_months': months
             })
 
     return configs
@@ -108,34 +182,45 @@ def get_batch_2_configs():
 
 def get_batch_3_configs():
     """
-    BATCH 3: Remaining Cap Thresholds (Bearish/Defensive)
+    BATCH 3: Remaining Cap Tactical Triggers
     ~48 simulations, ~15 minutes
 
-    Tests: Remaining cap 10%, 25%, 50%, 75%
-    Launch Months: Quarterly (MAR, JUN, SEP, DEC)
-    Selections: 4 selection algorithms
-    Intent: Bearish (protect when cap depleted)
+    Tests rotation based on cap depletion
     """
     configs = []
 
-    thresholds = [0.10, 0.25, 0.50, 0.75]
+    thresholds = [0.25, 0.50]
     months = ['MAR', 'JUN', 'SEP', 'DEC']
 
-    selections = [
-        'select_most_recent_launch',
-        'select_remaining_cap',
-        'select_cap_utilization',
-        'select_highest_outcome_and_cap'
+    bullish_selections = [
+        'select_cap_utilization_lowest',
+        'select_remaining_cap_highest',
+        'select_downside_buffer_lowest'
+    ]
+
+    bearish_selections = [
+        'select_downside_buffer_highest',
+        'select_downside_buffer_lowest',
+        'select_cap_utilization_lowest'
     ]
 
     for threshold in thresholds:
-        for selection in selections:
+        # Bullish strategies
+        for selection in bullish_selections:
             configs.append({
                 'trigger_type': 'remaining_cap_threshold',
                 'trigger_params': {'threshold': threshold},
                 'selection_func_name': selection,
-                'launch_months': months,
-                'strategy_intent': 'bearish'
+                'launch_months': months
+            })
+
+        # Bearish strategies
+        for selection in bearish_selections:
+            configs.append({
+                'trigger_type': 'remaining_cap_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'launch_months': months
             })
 
     return configs
@@ -143,163 +228,91 @@ def get_batch_3_configs():
 
 def get_batch_4_configs():
     """
-    BATCH 4: Reference Asset Return Thresholds (Directional)
+    BATCH 4: Market-Responsive Triggers (Ref Asset + Buffer)
     ~60 simulations, ~18 minutes
 
-    Tests: SPY returns at -10%, -5%, +5%, +10%, +15%
-    Launch Months: Quarterly (MAR, JUN, SEP, DEC)
-    Selections: 3 selection algorithms
-    Intent: Mixed (bullish for positive, bearish for negative)
+    Tests rotation based on market performance and buffer proximity
     """
     configs = []
 
-    # Bearish thresholds (negative returns)
-    bearish_thresholds = [-0.10, -0.05]
-    # Bullish thresholds (positive returns)
-    bullish_thresholds = [0.05, 0.10, 0.15]
-
     months = ['MAR', 'JUN', 'SEP', 'DEC']
 
-    selections = [
-        'select_most_recent_launch',
-        'select_remaining_cap',
-        'select_highest_outcome_and_cap'
+    bullish_selections = [
+        'select_cap_utilization_lowest',
+        'select_remaining_cap_highest',
+        'select_downside_buffer_lowest'
     ]
 
-    for threshold in bearish_thresholds:
-        for selection in selections:
+    bearish_selections = [
+        'select_downside_buffer_highest',
+        'select_downside_buffer_lowest',
+        'select_cap_utilization_lowest'
+    ]
+
+    # Reference Asset Return Thresholds
+    ref_thresholds = [-0.10, 0.0, 0.10]
+
+    for threshold in ref_thresholds:
+        # Bullish strategies
+        for selection in bullish_selections:
             configs.append({
                 'trigger_type': 'ref_asset_return_threshold',
                 'trigger_params': {'threshold': threshold},
                 'selection_func_name': selection,
-                'launch_months': months,
-                'strategy_intent': 'bearish'
+                'launch_months': months
             })
 
-    for threshold in bullish_thresholds:
-        for selection in selections:
+        # Bearish strategies
+        for selection in bearish_selections:
             configs.append({
                 'trigger_type': 'ref_asset_return_threshold',
                 'trigger_params': {'threshold': threshold},
                 'selection_func_name': selection,
-                'launch_months': months,
-                'strategy_intent': 'bullish'
+                'launch_months': months
             })
 
-    return configs
+    # Downside Before Buffer Thresholds
+    buffer_thresholds = [-0.02, 0.0]
 
-
-def get_batch_5_configs():
-    """
-    BATCH 5: Downside Before Buffer Thresholds (Defensive)
-    ~36 simulations, ~12 minutes
-
-    Tests: Downside -5%, -2%, 0% (in buffer)
-    Launch Months: Quarterly (MAR, JUN, SEP, DEC)
-    Selections: 3 selection algorithms
-    Intent: Bearish (react to buffer breach)
-    """
-    configs = []
-
-    thresholds = [-0.05, -0.02, 0.0]
-    months = ['MAR', 'JUN', 'SEP', 'DEC']
-
-    selections = [
-        'select_most_recent_launch',
-        'select_remaining_cap',
-        'select_highest_outcome_and_cap'
-    ]
-
-    for threshold in thresholds:
-        for selection in selections:
+    for threshold in buffer_thresholds:
+        # Bullish strategies
+        for selection in bullish_selections:
             configs.append({
                 'trigger_type': 'downside_before_buffer_threshold',
                 'trigger_params': {'threshold': threshold},
                 'selection_func_name': selection,
-                'launch_months': months,
-                'strategy_intent': 'bearish'
+                'launch_months': months
+            })
+
+        # Bearish strategies
+        for selection in bearish_selections:
+            configs.append({
+                'trigger_type': 'downside_before_buffer_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'launch_months': months
             })
 
     return configs
-
-
-def get_batch_6_configs():
-    """
-    BATCH 6: Best-of-Batch Cross-Validation
-    ~48 simulations, ~15 minutes
-
-    After reviewing batches 1-5, select top 2-3 from each category
-    and test with ALL 12 launch months for comprehensive coverage.
-
-    This batch should be customized based on learnings from batches 1-5.
-    """
-    configs = []
-
-    # Example: Top performers from each batch (customize after reviewing results)
-
-    # From Batch 1: Best time-based
-    configs.append({
-        'trigger_type': 'rebalance_time_period',
-        'trigger_params': {'frequency': 'quarterly'},
-        'selection_func_name': 'select_most_recent_launch',
-        'launch_months': ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-                          'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'],
-        'strategy_intent': 'neutral'
-    })
-
-    # From Batch 2: Best cap utilization
-    configs.append({
-        'trigger_type': 'cap_utilization_threshold',
-        'trigger_params': {'threshold': 0.75},
-        'selection_func_name': 'select_remaining_cap',
-        'launch_months': ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-                          'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'],
-        'strategy_intent': 'bearish'
-    })
-
-    # From Batch 3: Best remaining cap
-    configs.append({
-        'trigger_type': 'remaining_cap_threshold',
-        'trigger_params': {'threshold': 0.25},
-        'selection_func_name': 'select_most_recent_launch',
-        'launch_months': ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-                          'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'],
-        'strategy_intent': 'bearish'
-    })
-
-    # From Batch 4: Best directional (customize based on results)
-    configs.append({
-        'trigger_type': 'ref_asset_return_threshold',
-        'trigger_params': {'threshold': 0.10},
-        'selection_func_name': 'select_most_recent_launch',
-        'launch_months': ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-                          'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'],
-        'strategy_intent': 'bullish'
-    })
-
-    return configs
-
 
 # ============================================================================
 # BATCH SELECTOR
 # ============================================================================
 
 BATCH_CONFIGS = {
+    0: get_batch_0_configs,  # ← Add this
     1: get_batch_1_configs,
     2: get_batch_2_configs,
     3: get_batch_3_configs,
     4: get_batch_4_configs,
-    5: get_batch_5_configs,
-    6: get_batch_6_configs
 }
 
 BATCH_DESCRIPTIONS = {
-    1: "Time-Based Rebalancing (Neutral)",
-    2: "Cap Utilization Thresholds (Bearish)",
-    3: "Remaining Cap Thresholds (Bearish)",
-    4: "Reference Asset Return Thresholds (Directional)",
-    5: "Downside Before Buffer Thresholds (Defensive)",
-    6: "Best-of-Batch Cross-Validation"
+    0: "Quick Test (3 Strategies)",  # ← Add this
+    1: "Time-Based Systematic (Bullish vs Bearish)",
+    2: "Cap Utilization Tactical",
+    3: "Remaining Cap Tactical",
+    4: "Market-Responsive (Ref Asset + Buffer)"
 }
 
 
@@ -342,8 +355,7 @@ def main():
     from backtesting.batch_runner import run_all_single_ticker_tests
     from analysis.consolidator import consolidate_results
     from analysis.forward_regime_analyzer import (
-        analyze_by_future_regime, summarize_optimal_strategies,
-        print_future_regime_summary
+        analyze_by_future_regime, summarize_optimal_strategies
     )
     from utils.excel_exporter import export_main_consolidated_workbook
     from utils.validators import validate_fund_data, validate_benchmark_data, validate_roll_dates
@@ -392,6 +404,18 @@ def main():
         bear_threshold=settings.REGIME_BEAR_THRESHOLD
     )
 
+    # ADD THIS DIAGNOSTIC:
+    print("\n" + "=" * 80)
+    print("FORWARD REGIME DISTRIBUTION CHECK")
+    print("=" * 80)
+    print(f"Bull threshold: {settings.REGIME_BULL_THRESHOLD * 100:+.1f}%")
+    print(f"Bear threshold: {settings.REGIME_BEAR_THRESHOLD * 100:+.1f}%")
+    print("\n3M Forward Regimes:")
+    print(df_forward_regimes['Future_Regime_3M'].value_counts())
+    print("\n6M Forward Regimes:")
+    print(df_forward_regimes['Future_Regime_6M'].value_counts())
+    print("=" * 80 + "\n")
+
     # Run backtests
     print(f"\n{'=' * 80}")
     print(f"RUNNING BATCH {BATCH_NUMBER} BACKTESTS")
@@ -417,10 +441,42 @@ def main():
     future_regime_df = analyze_by_future_regime(results_list, df_forward_regimes)
 
     if not future_regime_df.empty:
+        # Use 3M horizon instead of 6M
+        optimal_3m = summarize_optimal_strategies(future_regime_df, horizon='3M', top_n=10)
+
+        # Also keep 6M for comparison (optional)
         optimal_6m = summarize_optimal_strategies(future_regime_df, horizon='6M', top_n=10)
-        print_future_regime_summary(optimal_6m, horizon='6M')
     else:
+        optimal_3m = {}
         optimal_6m = {}
+
+    # DIAGNOSTIC - Add after optimal_3m and optimal_6m creation
+    print("\n" + "=" * 80)
+    print("OPTIMAL STRATEGIES DIAGNOSTIC")
+    print("=" * 80)
+
+    print("\noptimal_6m keys:", list(optimal_6m.keys()) if optimal_6m else "None")
+    if optimal_6m:
+        for regime, df in optimal_6m.items():
+            print(f"  {regime}: {len(df) if df is not None and not df.empty else 0} strategies")
+
+    print("\noptimal_3m keys:", list(optimal_3m.keys()) if optimal_3m else "None")
+    if optimal_3m:
+        for regime, df in optimal_3m.items():
+            print(f"  {regime}: {len(df) if df is not None and not df.empty else 0} strategies")
+
+    # Check what's in future_regime_df
+    print("\nfuture_regime_df shape:", future_regime_df.shape if not future_regime_df.empty else "EMPTY")
+    if not future_regime_df.empty:
+        print("\n6M regime distribution in future_regime_df:")
+        if 'future_regime_6m' in future_regime_df.columns:
+            print(future_regime_df['future_regime_6m'].value_counts())
+        print("\n3M regime distribution in future_regime_df:")
+        if 'future_regime_3m' in future_regime_df.columns:
+            print(future_regime_df['future_regime_3m'].value_counts())
+
+    print("=" * 80 + "\n")
+
 
     # Export
     print("\nExporting results...")
@@ -435,7 +491,7 @@ def main():
         df_forward_regimes=df_forward_regimes,
         future_regime_df=future_regime_df,
         optimal_6m=optimal_6m,
-        optimal_3m={},
+        optimal_3m=optimal_3m,
         intent_vs_regime_6m=None,
         intent_vs_regime_3m=None,
         robust_strategies_6m=None,
@@ -443,6 +499,27 @@ def main():
         ranked_6m_vs_spy=None,
         ranked_6m_vs_bufr=None
     )
+
+    # ========================================================================
+    # ADD PLOTTING HERE
+    # ========================================================================
+    print("\n" + "=" * 80)
+    print("GENERATING VISUALIZATIONS")
+    print("=" * 80)
+
+    from visualization.batch_performance_plots import create_all_batch_plots
+
+    create_all_batch_plots(
+        results_list=results_list,
+        summary_df=summary_df,
+        future_regime_df=future_regime_df,
+        optimal_6m=optimal_3m,  # Use 3M as primary analysis
+        output_dir=output_dir
+    )
+
+    # ========================================================================
+    # END PLOTTING
+    # ========================================================================
 
     end_time = datetime.now()
     duration = end_time - start_time

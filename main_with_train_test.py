@@ -58,7 +58,7 @@ from analysis.regime_analyzer import (
 from analysis.forward_regime_analyzer import (
     analyze_by_future_regime, rank_strategies_by_future_regime,
     summarize_optimal_strategies, compare_strategy_intent_vs_future_regime,
-    identify_robust_strategies, print_future_regime_summary
+    identify_robust_strategies
 )
 
 # Import train/test utilities
@@ -289,7 +289,6 @@ def main():
                 future_regime_train, horizon='6M', top_n=10
             )
 
-            print_future_regime_summary(optimal_train_6m, horizon='6M')
         else:
             print("  ⚠️  No training future regime data")
             optimal_train_6m = {}
@@ -320,7 +319,6 @@ def main():
                     future_regime_test, horizon='6M', top_n=10
                 )
 
-                print_future_regime_summary(optimal_test_6m, horizon='6M')
             else:
                 print("  ⚠️  No test future regime data")
                 optimal_test_6m = {}

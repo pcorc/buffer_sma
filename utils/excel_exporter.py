@@ -638,8 +638,6 @@ def export_consolidated_workbook_append(results_list, summary_df, output_dir, ru
 Excel export utilities for consolidated workbook output with forward regime analysis.
 """
 
-
-
 def export_main_consolidated_workbook(
         results_list, summary_df, output_dir, run_name='mainpy_consolidated',
         df_regimes=None, regime_df=None, capture_ratios=None,

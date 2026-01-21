@@ -191,16 +191,16 @@ def rank_strategies_by_future_regime(future_regime_df, horizon='6M', metric='for
     valid_data = future_regime_df[
         (future_regime_df[regime_col] != 'unknown') &
         (future_regime_df[perf_col].notna())
-        ].copy()
+    ].copy()
 
     if valid_data.empty:
         return pd.DataFrame()
 
     # Create strategy identifier
     valid_data['strategy_id'] = (
-            valid_data['launch_month'] + '_' +
-            valid_data['trigger_type'] + '_' +
-            valid_data['selection_algo']
+        valid_data['launch_month'] + '_' +
+        valid_data['trigger_type'] + '_' +
+        valid_data['selection_algo']
     )
 
     # Aggregate by strategy and future regime
@@ -209,10 +209,10 @@ def rank_strategies_by_future_regime(future_regime_df, horizon='6M', metric='for
         perf_col: ['mean', 'median', 'std', 'count']
     }).reset_index()
 
-    # Flatten column names
+    # Flatten column names - KEEP THE ORIGINAL REGIME COLUMN NAME
     aggregated.columns = [
         'strategy_id', 'launch_month', 'trigger_type', 'selection_algo',
-        'strategy_intent', 'future_regime',
+        'strategy_intent', regime_col,  # ← FIXED - preserve '3m' or '6m' suffix
         f'{metric}_mean', f'{metric}_median', f'{metric}_std', 'num_observations'
     ]
 
@@ -220,7 +220,7 @@ def rank_strategies_by_future_regime(future_regime_df, horizon='6M', metric='for
     ranked_results = []
 
     for regime in ['bull', 'bear', 'neutral']:
-        regime_data = aggregated[aggregated['future_regime'] == regime].copy()
+        regime_data = aggregated[aggregated[regime_col] == regime].copy()  # ← FIXED - use regime_col
 
         if regime_data.empty:
             continue
@@ -263,8 +263,12 @@ def summarize_optimal_strategies(future_regime_df, horizon='6M', top_n=5):
 
     optimal_strategies = {}
 
+    # Build the correct column name for this horizon
+    regime_col = f'future_regime_{horizon.lower()}'  # ← ADD THIS LINE
+
     for regime in ['bull', 'bear', 'neutral']:
-        regime_data = ranked[ranked['future_regime'] == regime].head(top_n)
+        # Use the correct column name
+        regime_data = ranked[ranked[regime_col] == regime].head(top_n)  # ← FIX THIS LINE
 
         if not regime_data.empty:
             optimal_strategies[regime] = regime_data[[
@@ -419,36 +423,3 @@ def identify_robust_strategies(future_regime_df, horizon='6M', min_observations=
 
     return pivoted
 
-
-def print_future_regime_summary(optimal_strategies, horizon='6M'):
-    """
-    Print formatted summary of optimal strategies by future regime.
-
-    Parameters:
-      optimal_strategies: Dict from summarize_optimal_strategies()
-      horizon: '3M' or '6M'
-    """
-    print(f"\n{'=' * 80}")
-    print(f"OPTIMAL STRATEGIES BY FUTURE REGIME ({horizon} HORIZON)")
-    print(f"{'=' * 80}\n")
-
-    for regime in ['bull', 'bear', 'neutral']:
-        if regime not in optimal_strategies:
-            continue
-
-        regime_data = optimal_strategies[regime]
-
-        if regime_data.empty:
-            continue
-
-        print(f"\n{regime.upper()} MARKET AHEAD:")
-        print("-" * 80)
-
-        for _, row in regime_data.iterrows():
-            print(f"  #{int(row['rank'])}. {row['launch_month']} | "
-                  f"{row['trigger_type'][:30]} | {row['selection_algo'][:25]}")
-            print(f"      Intent: {row['strategy_intent']:8s} | "
-                  f"Excess vs BUFR: {row['excess_vs_bufr_mean'] * 100:+6.2f}% (median: {row['excess_vs_bufr_median'] * 100:+6.2f}%) | "
-                  f"N={int(row['num_observations'])}")
-
-    print(f"\n{'=' * 80}\n")
