@@ -84,13 +84,6 @@ def classify_forward_regimes(df_spy, window_3m_days=63, window_6m_days=126,
     valid_6m = df['Future_Regime_6M'].ne('unknown').sum()
     total_dates = len(df)
 
-    print(f"\nForward Regime Data Availability:")
-    print(f"  Total dates: {total_dates}")
-    print(f"  Valid 3M forward regimes: {valid_3m} ({valid_3m / total_dates * 100:.1f}%)")
-    print(f"  Valid 6M forward regimes: {valid_6m} ({valid_6m / total_dates * 100:.1f}%)")
-    print(f"  Missing 3M (end of dataset): {total_dates - valid_3m}")
-    print(f"  Missing 6M (end of dataset): {total_dates - valid_6m}")
-
     # Summary statistics for 3M forward regimes
     regime_3m_counts = df['Future_Regime_3M'].value_counts()
     print(f"\n3-Month Forward Regime Distribution:")

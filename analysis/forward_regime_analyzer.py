@@ -13,36 +13,25 @@ import pandas as pd
 import numpy as np
 
 
-def analyze_by_future_regime(results_list, df_forward_regimes):
+def analyze_by_future_regime(results_list, df_forward_regimes, entry_frequency='quarterly'):
     """
-    Calculate strategy performance based on FUTURE regime at entry.
+    Calculate strategy performance based on FUTURE regime at MULTIPLE entry points.
 
-    For each backtest result:
-    1. Identify the strategy entry date (start_date)
-    2. Look up what the future regime was at that date (3M and 6M ahead)
-    3. Calculate the actual forward returns (3M and 6M)
-    4. Attribute performance to that future regime
+    For each strategy configuration:
+    1. Test entering at multiple dates (quarterly roll dates by default)
+    2. For each entry, look up what future regime follows (3M and 6M ahead)
+    3. Calculate forward returns from that entry point
+    4. Create one row per entry point per strategy
 
     Parameters:
       results_list: List of result dicts from run_single_ticker_backtest
       df_forward_regimes: DataFrame from classify_forward_regimes()
+      entry_frequency: 'monthly', 'quarterly', 'semi_annual', or 'all_dates'
 
     Returns:
-      DataFrame with columns:
-        - launch_month
-        - trigger_type
-        - trigger_params
-        - selection_algo
-        - strategy_intent
-        - entry_date (when strategy started)
-        - future_regime_3m (what regime followed)
-        - future_regime_6m (what regime followed)
-        - forward_3m_return (strategy return over next 3 months)
-        - forward_6m_return (strategy return over next 6 months)
-        - spy_forward_3m_return (SPY return over next 3 months)
-        - spy_forward_6m_return (SPY return over next 6 months)
-        - excess_3m (strategy vs SPY over 3M)
-        - excess_6m (strategy vs SPY over 6M)
+      DataFrame with one row per entry point per strategy:
+        - Multiple rows per strategy (one for each entry date)
+        - Each row shows performance from that specific entry
     """
 
     if not results_list:
@@ -50,108 +39,176 @@ def analyze_by_future_regime(results_list, df_forward_regimes):
         return pd.DataFrame()
 
     print("\n" + "=" * 80)
-    print("ANALYZING PERFORMANCE BY FUTURE REGIME")
+    print("ANALYZING PERFORMANCE BY FUTURE REGIME (MULTIPLE ENTRY POINTS)")
     print("=" * 80)
+    print(f"Entry frequency: {entry_frequency}")
 
     future_regime_records = []
+    total_entries = 0
+    skipped_entries = 0
 
     for result in results_list:
-        entry_date = result['start_date']
-
-        # Look up future regime at entry date
-        future_regime_data = df_forward_regimes[
-            df_forward_regimes['Date'] == entry_date
-            ]
-
-        if future_regime_data.empty:
-            print(f"  ⚠️  No future regime data for {entry_date.date()} - skipping")
-            continue
-
-        future_regime_row = future_regime_data.iloc[0]
-        future_regime_3m = future_regime_row['Future_Regime_3M']
-        future_regime_6m = future_regime_row['Future_Regime_6M']
-
-        # Skip if future regime is unknown (end of dataset)
-        if future_regime_3m == 'unknown' and future_regime_6m == 'unknown':
-            continue
-
-        # Calculate forward returns from entry date
-        # Get daily performance data
+        # Get the daily performance data for this strategy
         daily_perf = result['daily_performance'].copy()
         daily_perf = daily_perf.sort_values('Date').reset_index(drop=True)
 
-        # Find 3-month and 6-month future dates (approximately)
-        entry_nav = daily_perf.iloc[0]['Strategy_NAV']  # Should be 100
-        entry_spy_nav = daily_perf.iloc[0]['SPY_NAV']
-        entry_bufr_nav = daily_perf.iloc[0]['BUFR_NAV']
+        if daily_perf.empty:
+            continue
 
-        # 3-month forward (63 trading days)
-        if len(daily_perf) >= 64:  # Need at least 64 days (0-indexed)
-            day_63 = daily_perf.iloc[63]
-            forward_3m_strat_nav = day_63['Strategy_NAV']
-            forward_3m_spy_nav = day_63['SPY_NAV']
-            forward_3m_bufr_nav = day_63['BUFR_NAV']
+        # Determine entry points based on frequency
+        entry_points = _get_entry_points(daily_perf, entry_frequency)
 
-            forward_3m_return = (forward_3m_strat_nav / entry_nav) - 1
-            spy_forward_3m_return = (forward_3m_spy_nav / entry_spy_nav) - 1
-            bufr_forward_3m_return = (forward_3m_bufr_nav / entry_bufr_nav) - 1
-        else:
-            forward_3m_return = np.nan
-            spy_forward_3m_return = np.nan
-            bufr_forward_3m_return = np.nan
+        # For each potential entry point, calculate forward returns
+        for entry_date in entry_points:
+            total_entries += 1
 
-        # 6-month forward (126 trading days)
-        if len(daily_perf) >= 127:
-            day_126 = daily_perf.iloc[126]
-            forward_6m_strat_nav = day_126['Strategy_NAV']
-            forward_6m_spy_nav = day_126['SPY_NAV']
-            forward_6m_bufr_nav = day_126['BUFR_NAV']
+            # Look up future regime at this entry date
+            future_regime_data = df_forward_regimes[
+                df_forward_regimes['Date'] == entry_date
+                ]
 
-            forward_6m_return = (forward_6m_strat_nav / entry_nav) - 1
-            spy_forward_6m_return = (forward_6m_spy_nav / entry_spy_nav) - 1
-            bufr_forward_6m_return = (forward_6m_bufr_nav / entry_bufr_nav) - 1
-        else:
-            forward_6m_return = np.nan
-            spy_forward_6m_return = np.nan
-            bufr_forward_6m_return = np.nan
+            if future_regime_data.empty:
+                skipped_entries += 1
+                continue
 
-        # Create record
-        record = {
-            'launch_month': result['launch_month'],
-            'trigger_type': result['trigger_type'],
-            'trigger_params': str(result['trigger_params']),
-            'selection_algo': result['selection_algo'],
-            'strategy_intent': result.get('strategy_intent', 'neutral'),
-            'entry_date': entry_date,
+            future_regime_row = future_regime_data.iloc[0]
+            future_regime_3m = future_regime_row['Future_Regime_3M']
+            future_regime_6m = future_regime_row['Future_Regime_6M']
 
-            # Future regime classifications
-            'future_regime_3m': future_regime_3m,
-            'future_regime_6m': future_regime_6m,
+            # Skip if both horizons are unknown (end of dataset)
+            if future_regime_3m == 'unknown' and future_regime_6m == 'unknown':
+                skipped_entries += 1
+                continue
 
-            # Strategy forward returns
-            'forward_3m_return': forward_3m_return,
-            'forward_6m_return': forward_6m_return,
+            # Get the entry point index in daily_perf
+            entry_idx = daily_perf[daily_perf['Date'] == entry_date].index
 
-            # Benchmark forward returns
-            'spy_forward_3m_return': spy_forward_3m_return,
-            'spy_forward_6m_return': spy_forward_6m_return,
-            'bufr_forward_3m_return': bufr_forward_3m_return,
-            'bufr_forward_6m_return': bufr_forward_6m_return,
+            if len(entry_idx) == 0:
+                skipped_entries += 1
+                continue
 
-            # Excess returns
-            'excess_vs_spy_3m': forward_3m_return - spy_forward_3m_return if pd.notna(forward_3m_return) else np.nan,
-            'excess_vs_spy_6m': forward_6m_return - spy_forward_6m_return if pd.notna(forward_6m_return) else np.nan,
-            'excess_vs_bufr_3m': forward_3m_return - bufr_forward_3m_return if pd.notna(forward_3m_return) else np.nan,
-            'excess_vs_bufr_6m': forward_6m_return - bufr_forward_6m_return if pd.notna(forward_6m_return) else np.nan,
-        }
+            entry_idx = entry_idx[0]
 
-        future_regime_records.append(record)
+            # Get NAVs at entry
+            entry_nav = daily_perf.loc[entry_idx, 'Strategy_NAV']
+            entry_spy_nav = daily_perf.loc[entry_idx, 'SPY_NAV']
+            entry_bufr_nav = daily_perf.loc[entry_idx, 'BUFR_NAV']
+
+            # Calculate 3-month forward returns (63 trading days)
+            future_3m_idx = entry_idx + 63
+            if future_3m_idx < len(daily_perf):
+                forward_3m_strat_nav = daily_perf.loc[future_3m_idx, 'Strategy_NAV']
+                forward_3m_spy_nav = daily_perf.loc[future_3m_idx, 'SPY_NAV']
+                forward_3m_bufr_nav = daily_perf.loc[future_3m_idx, 'BUFR_NAV']
+
+                forward_3m_return = (forward_3m_strat_nav / entry_nav) - 1
+                spy_forward_3m_return = (forward_3m_spy_nav / entry_spy_nav) - 1
+                bufr_forward_3m_return = (forward_3m_bufr_nav / entry_bufr_nav) - 1
+            else:
+                forward_3m_return = np.nan
+                spy_forward_3m_return = np.nan
+                bufr_forward_3m_return = np.nan
+
+            # Calculate 6-month forward returns (126 trading days)
+            future_6m_idx = entry_idx + 126
+            if future_6m_idx < len(daily_perf):
+                forward_6m_strat_nav = daily_perf.loc[future_6m_idx, 'Strategy_NAV']
+                forward_6m_spy_nav = daily_perf.loc[future_6m_idx, 'SPY_NAV']
+                forward_6m_bufr_nav = daily_perf.loc[future_6m_idx, 'BUFR_NAV']
+
+                forward_6m_return = (forward_6m_strat_nav / entry_nav) - 1
+                spy_forward_6m_return = (forward_6m_spy_nav / entry_spy_nav) - 1
+                bufr_forward_6m_return = (forward_6m_bufr_nav / entry_bufr_nav) - 1
+            else:
+                forward_6m_return = np.nan
+                spy_forward_6m_return = np.nan
+                bufr_forward_6m_return = np.nan
+
+            # Create record for this entry point
+            record = {
+                'launch_month': result['launch_month'],
+                'trigger_type': result['trigger_type'],
+                'trigger_params': str(result['trigger_params']),
+                'selection_algo': result['selection_algo'],
+                'strategy_intent': result.get('strategy_intent', 'neutral'),
+                'entry_date': entry_date,
+
+                # Future regime classifications
+                'future_regime_3m': future_regime_3m,
+                'future_regime_6m': future_regime_6m,
+
+                # Strategy forward returns
+                'forward_3m_return': forward_3m_return,
+                'forward_6m_return': forward_6m_return,
+
+                # Benchmark forward returns
+                'spy_forward_3m_return': spy_forward_3m_return,
+                'spy_forward_6m_return': spy_forward_6m_return,
+                'bufr_forward_3m_return': bufr_forward_3m_return,
+                'bufr_forward_6m_return': bufr_forward_6m_return,
+
+                # Excess returns
+                'excess_vs_spy_3m': forward_3m_return - spy_forward_3m_return if pd.notna(forward_3m_return) else np.nan,
+                'excess_vs_spy_6m': forward_6m_return - spy_forward_6m_return if pd.notna(forward_6m_return) else np.nan,
+                'excess_vs_bufr_3m': forward_3m_return - bufr_forward_3m_return if pd.notna(forward_3m_return) else np.nan,
+                'excess_vs_bufr_6m': forward_6m_return - bufr_forward_6m_return if pd.notna(forward_6m_return) else np.nan,
+            }
+
+            future_regime_records.append(record)
 
     future_regime_df = pd.DataFrame(future_regime_records)
 
-    print(f"\n✅ Analyzed {len(future_regime_df)} strategy entries with future regime data")
+    print(f"\n✅ Analyzed {len(future_regime_df)} total entry points across {len(results_list)} strategies")
+    print(f"   Valid entries: {len(future_regime_df)}")
+    print(f"   Skipped entries: {skipped_entries}")
+
+    if not future_regime_df.empty:
+        print(f"\n   Entries per strategy (avg): {len(future_regime_df) / len(results_list):.1f}")
+        print(f"\n   Regime distribution (6M):")
+        print(f"   {future_regime_df['future_regime_6m'].value_counts()}")
+
+    print("=" * 80 + "\n")
 
     return future_regime_df
+
+
+def _get_entry_points(daily_perf, frequency='quarterly'):
+    """
+    Helper function to determine entry points based on frequency.
+
+    Parameters:
+      daily_perf: DataFrame with daily performance data
+      frequency: 'monthly', 'quarterly', 'semi_annual', 'all_dates'
+
+    Returns:
+      List of pd.Timestamp entry dates
+    """
+    all_dates = daily_perf['Date'].tolist()
+
+    if frequency == 'all_dates':
+        # Use every date (will be VERY slow)
+        return all_dates
+
+    elif frequency == 'monthly':
+        # Use first day of each month
+        monthly_dates = daily_perf.groupby(daily_perf['Date'].dt.to_period('M')).first()['Date']
+        return monthly_dates.tolist()
+
+    elif frequency == 'quarterly':
+        # Use first day of each quarter (Mar, Jun, Sep, Dec)
+        quarterly_dates = daily_perf.groupby(daily_perf['Date'].dt.to_period('Q')).first()['Date']
+        return quarterly_dates.tolist()
+
+    elif frequency == 'semi_annual':
+        # Use first day of each half-year
+        semi_dates = daily_perf[daily_perf['Date'].dt.month.isin([3, 9])]
+        semi_dates = semi_dates.groupby(semi_dates['Date'].dt.year)['Date'].first()
+        return semi_dates.tolist()
+
+    else:
+        # Default to quarterly
+        quarterly_dates = daily_perf.groupby(daily_perf['Date'].dt.to_period('Q')).first()['Date']
+        return quarterly_dates.tolist()
 
 
 def rank_strategies_by_future_regime(future_regime_df, horizon='6M', metric='forward_return'):

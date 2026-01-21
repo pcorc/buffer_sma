@@ -57,8 +57,8 @@ LAUNCH_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
 # =============================================================================
 
 REGIME_WINDOW_MONTHS = 6
-REGIME_BULL_THRESHOLD = 0.02   # 5% gain = bull
-REGIME_BEAR_THRESHOLD = -0.02  # -5% loss = bear  ← More sensitive
+REGIME_BULL_THRESHOLD = 0.03   # 5% gain = bull
+REGIME_BEAR_THRESHOLD = -0.03  # -5% loss = bear  ← More sensitive
 
 # =============================================================================
 # REBALANCING FREQUENCIES

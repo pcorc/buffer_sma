@@ -37,7 +37,7 @@ def get_batch_0_configs():
     """
     configs = []
 
-    months = ['MAR','DEC']
+    months = ['MAR']
 
     # # BULLISH STRATEGIES (3)
     # configs.append({
@@ -295,26 +295,220 @@ def get_batch_4_configs():
 
     return configs
 
+
+def get_comprehensive_regime_batch_configs():
+    """
+    COMPREHENSIVE BATCH: Optimized for Finding Best Strategy per Regime
+    180 simulations, ~54 minutes
+
+    Refinements:
+    - 6 launch months (MAR, MAY, JUL, SEP, NOV, JAN) for better coverage
+    - Quarterly only for time-based (no monthly/semi-annual/annual)
+    - Expanded regime thresholds: ±2%, ±3%, ±5%, ±7%
+    - Strategic design for bull/bear/neutral optimization
+    """
+    configs = []
+
+    # =========================================================================
+    # SECTION 1: BULLISH STRATEGIES (60 simulations)
+    # Goal: Maximum upside capture in bull markets
+    # =========================================================================
+
+    # GROUP 1A: Aggressive Time-Based - Quarterly Only (12 sims)
+    # Strategy: Frequent rebalancing to fresh upside
+    bullish_selections_aggressive = [
+        'select_cap_utilization_lowest',
+        'select_remaining_cap_highest'
+    ]
+
+    for selection in bullish_selections_aggressive:
+        configs.append({
+            'trigger_type': 'rebalance_time_period',
+            'trigger_params': {'frequency': 'quarterly'},
+            'selection_func_name': selection,
+            'strategy_intent': 'bullish'
+        })
+
+    # GROUP 1B: Low Cap Utilization Triggers (18 sims)
+    # Strategy: Rotate when cap depletes, seeking fresh gains
+    for threshold in [0.25, 0.50, 0.75]:
+        for selection in bullish_selections_aggressive:
+            configs.append({
+                'trigger_type': 'cap_utilization_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'strategy_intent': 'bullish'
+            })
+
+    # GROUP 1C: Low Remaining Cap Triggers (18 sims)
+    # Strategy: Switch when cap running low, find fresh caps
+    for threshold in [0.25, 0.50, 0.75]:
+        for selection in bullish_selections_aggressive:
+            configs.append({
+                'trigger_type': 'remaining_cap_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'strategy_intent': 'bullish'
+            })
+
+    # GROUP 1D: Positive Momentum Triggers - EXPANDED (12 sims)
+    # Strategy: Ride momentum when market is strong
+    # Test: +2%, +3%, +5%, +7% return thresholds
+    for threshold in [0.03, 0.05]:
+        for selection in bullish_selections_aggressive:
+            configs.append({
+                'trigger_type': 'ref_asset_return_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'strategy_intent': 'bullish'
+            })
+
+    # =========================================================================
+    # SECTION 2: BEARISH STRATEGIES (60 simulations)
+    # Goal: Capital preservation and downside protection
+    # =========================================================================
+
+    # GROUP 2A: Defensive Time-Based - Quarterly Only (12 sims)
+    # Strategy: Regular rotation to highest buffer protection
+    bearish_selections_defensive = [
+        'select_downside_buffer_highest',
+        'select_cap_utilization_lowest'
+    ]
+
+    for selection in bearish_selections_defensive:
+        configs.append({
+            'trigger_type': 'rebalance_time_period',
+            'trigger_params': {'frequency': 'quarterly'},
+            'selection_func_name': selection,
+            'strategy_intent': 'bearish'
+        })
+
+    # GROUP 2B: Buffer Proximity Triggers - EXPANDED (24 sims)
+    # Strategy: Rotate when approaching buffer zone
+    # Test: -2%, -3%, -5%, -7% from buffer
+    for threshold in [-0.07, -0.05, -0.03]:
+        for selection in bearish_selections_defensive:
+            configs.append({
+                'trigger_type': 'downside_before_buffer_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'strategy_intent': 'bearish'
+            })
+
+    # GROUP 2C: Negative Momentum Triggers - EXPANDED (12 sims)
+    # Strategy: Rotate to protection when market weakens
+    # Test: -2%, -3%, -5%, -7% returns
+    for threshold in [-0.07, -0.05, -0.03]:
+        for selection in bearish_selections_defensive:
+            configs.append({
+                'trigger_type': 'ref_asset_return_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'strategy_intent': 'bearish'
+            })
+
+    # GROUP 2D: High Cap Utilization Triggers (12 sims)
+    # Strategy: When cap is exhausted, rotate to fresh protection
+    for threshold in [0.75, 0.90]:
+        for selection in bearish_selections_defensive:
+            configs.append({
+                'trigger_type': 'cap_utilization_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'strategy_intent': 'bearish'
+            })
+
+    # =========================================================================
+    # SECTION 3: NEUTRAL STRATEGIES (60 simulations)
+    # Goal: Consistency across all market conditions
+    # =========================================================================
+
+    # GROUP 3A: Balanced Time-Based - Quarterly Only (18 sims)
+    # Strategy: Systematic rebalancing with balanced selections
+    neutral_selections_balanced = [
+        'select_remaining_cap_highest',
+        'select_downside_buffer_highest',
+        'select_cap_utilization_lowest'
+    ]
+
+    for selection in neutral_selections_balanced:
+        configs.append({
+            'trigger_type': 'rebalance_time_period',
+            'trigger_params': {'frequency': 'quarterly'},
+            'selection_func_name': selection,
+            'strategy_intent': 'neutral'
+        })
+
+    # GROUP 3B: Moderate Cap Thresholds (18 sims)
+    # Strategy: Mid-range triggers for balanced rotation
+    for threshold in [0.40, 0.70]:
+        for selection in neutral_selections_balanced:
+            configs.append({
+                'trigger_type': 'cap_utilization_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'strategy_intent': 'neutral'
+            })
+
+    # GROUP 3C: Moderate Remaining Cap (18 sims)
+    # Strategy: Switch at moderate depletion
+    for threshold in [0.40, 0.70]:
+        for selection in neutral_selections_balanced:
+            configs.append({
+                'trigger_type': 'remaining_cap_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'strategy_intent': 'neutral'
+            })
+
+    # GROUP 3D: Zero-Threshold Triggers (6 sims)
+    # Strategy: React to any directional move
+    for selection in ['select_cap_utilization_lowest', 'select_remaining_cap_highest', 'select_downside_buffer_highest']:
+        configs.append({
+            'trigger_type': 'ref_asset_return_threshold',
+            'trigger_params': {'threshold': 0.0},
+            'selection_func_name': selection,
+            'strategy_intent': 'neutral'
+        })
+
+
+    return configs
+
+
+def get_batch_5_configs():
+    """
+    BATCH 5: Comprehensive Regime-Optimized Testing
+    180 simulations, ~54 minutes
+    """
+    configs = get_comprehensive_regime_batch_configs()
+
+    # Add launch_months to each config
+    months = ['JAN', 'MAR', 'MAY', 'JUL', 'SEP', 'NOV']
+    for config in configs:
+        config['launch_months'] = months
+
+    return configs
 # ============================================================================
 # BATCH SELECTOR
 # ============================================================================
 
 BATCH_CONFIGS = {
-    0: get_batch_0_configs,  # ← Add this
+    0: get_batch_0_configs,
     1: get_batch_1_configs,
     2: get_batch_2_configs,
     3: get_batch_3_configs,
     4: get_batch_4_configs,
+    5: get_batch_5_configs  # ← ADD THIS
 }
 
 BATCH_DESCRIPTIONS = {
-    0: "Quick Test (3 Strategies)",  # ← Add this
+    0: "Quick Test (3 Strategies)",
     1: "Time-Based Systematic (Bullish vs Bearish)",
     2: "Cap Utilization Tactical",
     3: "Remaining Cap Tactical",
-    4: "Market-Responsive (Ref Asset + Buffer)"
+    4: "Market-Responsive (Ref Asset + Buffer)",
+    5: "Comprehensive Regime-Optimized (180 sims, 6 months, expanded thresholds)"  # ← ADD THIS
 }
-
 
 # ============================================================================
 # MAIN EXECUTION
@@ -325,7 +519,6 @@ def main():
 
     if BATCH_NUMBER not in BATCH_CONFIGS:
         print(f"❌ Invalid BATCH_NUMBER: {BATCH_NUMBER}")
-        print(f"   Please set BATCH_NUMBER to 1-6")
         return
 
     print("\n" + "=" * 80)
@@ -404,18 +597,6 @@ def main():
         bear_threshold=settings.REGIME_BEAR_THRESHOLD
     )
 
-    # ADD THIS DIAGNOSTIC:
-    print("\n" + "=" * 80)
-    print("FORWARD REGIME DISTRIBUTION CHECK")
-    print("=" * 80)
-    print(f"Bull threshold: {settings.REGIME_BULL_THRESHOLD * 100:+.1f}%")
-    print(f"Bear threshold: {settings.REGIME_BEAR_THRESHOLD * 100:+.1f}%")
-    print("\n3M Forward Regimes:")
-    print(df_forward_regimes['Future_Regime_3M'].value_counts())
-    print("\n6M Forward Regimes:")
-    print(df_forward_regimes['Future_Regime_6M'].value_counts())
-    print("=" * 80 + "\n")
-
     # Run backtests
     print(f"\n{'=' * 80}")
     print(f"RUNNING BATCH {BATCH_NUMBER} BACKTESTS")
@@ -438,35 +619,31 @@ def main():
     summary_df = consolidate_results(results_list)
 
     # Forward regime analysis
-    future_regime_df = analyze_by_future_regime(results_list, df_forward_regimes)
+    future_regime_df = analyze_by_future_regime(
+        results_list,
+        df_forward_regimes,
+        entry_frequency='quarterly'  # This creates multiple entry points
+    )
 
     if not future_regime_df.empty:
-        # Use 3M horizon instead of 6M
+        # Analyze 3M horizon
         optimal_3m = summarize_optimal_strategies(future_regime_df, horizon='3M', top_n=10)
 
-        # Also keep 6M for comparison (optional)
+        # Analyze 6M horizon (from SAME backtest data)
         optimal_6m = summarize_optimal_strategies(future_regime_df, horizon='6M', top_n=10)
     else:
         optimal_3m = {}
         optimal_6m = {}
 
-    # DIAGNOSTIC - Add after optimal_3m and optimal_6m creation
-    print("\n" + "=" * 80)
-    print("OPTIMAL STRATEGIES DIAGNOSTIC")
-    print("=" * 80)
-
-    print("\noptimal_6m keys:", list(optimal_6m.keys()) if optimal_6m else "None")
     if optimal_6m:
         for regime, df in optimal_6m.items():
             print(f"  {regime}: {len(df) if df is not None and not df.empty else 0} strategies")
 
-    print("\noptimal_3m keys:", list(optimal_3m.keys()) if optimal_3m else "None")
     if optimal_3m:
         for regime, df in optimal_3m.items():
             print(f"  {regime}: {len(df) if df is not None and not df.empty else 0} strategies")
 
     # Check what's in future_regime_df
-    print("\nfuture_regime_df shape:", future_regime_df.shape if not future_regime_df.empty else "EMPTY")
     if not future_regime_df.empty:
         print("\n6M regime distribution in future_regime_df:")
         if 'future_regime_6m' in future_regime_df.columns:
@@ -474,9 +651,6 @@ def main():
         print("\n3M regime distribution in future_regime_df:")
         if 'future_regime_3m' in future_regime_df.columns:
             print(future_regime_df['future_regime_3m'].value_counts())
-
-    print("=" * 80 + "\n")
-
 
     # Export
     print("\nExporting results...")
