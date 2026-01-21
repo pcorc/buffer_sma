@@ -55,6 +55,27 @@ BENCHMARK_COLORS = {
 # HELPER FUNCTIONS
 # =============================================================================
 
+
+def _get_earliest_benchmark_data(results_list: List[Dict]) -> pd.DataFrame:
+    """
+    Get benchmark NAV data from the earliest-starting strategy.
+
+    Ensures benchmarks are plotted from the same start date as
+    the earliest strategy, avoiding visual misalignment.
+    """
+    if not results_list:
+        return pd.DataFrame()
+
+    # Find result with earliest start date
+    earliest_result = min(results_list,
+                          key=lambda r: r['daily_performance']['Date'].min())
+
+    earliest_date = earliest_result['daily_performance']['Date'].min()
+    print(f"    Using benchmark data from {earliest_date.date()} (earliest strategy)")
+
+    return earliest_result['daily_performance']
+
+
 def _create_strategy_id(row) -> str:
     """Create unique strategy identifier from row or dict."""
     if isinstance(row, dict):
@@ -304,6 +325,9 @@ def plot_best_strategies_comparison(
     # Determine what to plot
     intents = summary_df['strategy_intent'].unique()
 
+    # ✅ ALWAYS initialize colors dict (both paths)
+    colors = {}
+
     if len(intents) > 1:
         # Multi-intent: show best of each
         best = _find_best_strategies(summary_df)
@@ -314,6 +338,16 @@ def plot_best_strategies_comparison(
             if key.endswith('_sharpe'):  # Only plot Sharpe-based best
                 strategy_ids[key] = _create_strategy_id(row)
                 strategy_rows[key] = row
+
+                # ✅ Assign colors for multi-intent
+                if 'bullish' in key:
+                    colors[key] = INTENT_COLORS['bullish']['best']
+                elif 'bearish' in key:
+                    colors[key] = INTENT_COLORS['bearish']['best']
+                elif 'neutral' in key:
+                    colors[key] = INTENT_COLORS['neutral']['best']
+                else:
+                    colors[key] = INTENT_COLORS['cost_optimized']['best']
 
         labels = {
             'bullish_sharpe': 'Bullish (Best Sharpe)',
@@ -330,7 +364,8 @@ def plot_best_strategies_comparison(
         strategy_ids = {}
         strategy_rows = {}
         labels = {}
-        colors = {}
+
+        # ✅ Define colors for single-intent path
         color_palette = ['#2E7D32', '#1565C0', '#F57C00']  # Green, Blue, Orange
 
         for i, (idx, row) in enumerate(top_3.iterrows(), 1):
@@ -339,7 +374,7 @@ def plot_best_strategies_comparison(
             strategy_ids[key] = _create_strategy_id(row)
             strategy_rows[key] = row
             labels[key] = f'#{i}: Sharpe {row["strategy_sharpe"]:.2f}'
-            colors[key] = color_palette[i-1]  # NEW: Assign color
+            colors[key] = color_palette[i - 1]  # ✅ Assign color
 
     # Plot strategies
     plotted_strategies = []
@@ -350,32 +385,21 @@ def plot_best_strategies_comparison(
             if result_id == strat_id:
                 daily_nav = result['daily_performance']
 
-                # Determine color
-                if key in colors:
-                    color = colors[key]
-                elif 'bullish' in key:
-                    color = INTENT_COLORS['bullish']['best']
-                elif 'bearish' in key:
-                    color = INTENT_COLORS['bearish']['best']
-                elif 'neutral' in key:
-                    color = INTENT_COLORS['neutral']['best']
-                elif key == 'best_sharpe':
-                    color = '#1f77b4'
-                elif key == 'best_return':
-                    color = '#2ca02c'
-                else:
-                    color = '#ff7f0e'
+                # ✅ Simplified color logic - colors dict always exists now
+                color = colors.get(key, '#666666')  # Fallback gray if key missing
 
                 ax.plot(daily_nav['Date'], daily_nav['Strategy_NAV'],
                         color=color, linewidth=2.5, alpha=0.9,
                         label=labels[key], zorder=10)
 
-                plotted_strategies.append((key, strategy_rows[key], color))  # ✅ Always 3-tuple
+                plotted_strategies.append((key, strategy_rows[key], color))
                 break
 
-    # Plot benchmarks
+    # Plot benchmarks - find earliest start date across all results
     if results_list:
-        benchmark_nav = results_list[0]['daily_performance']
+        # Find result with earliest start date
+        earliest_result = min(results_list, key=lambda r: r['daily_performance']['Date'].min())
+        benchmark_nav = _get_earliest_benchmark_data(results_list)
 
         ax.plot(benchmark_nav['Date'], benchmark_nav['SPY_NAV'],
                 color=BENCHMARK_COLORS['SPY'], linewidth=2.0, linestyle='--',
@@ -568,14 +592,21 @@ def plot_threshold_comparison(
 def plot_regime_performance_with_bufr(
         future_regime_df: pd.DataFrame,
         optimal_strategies: Dict,
-        output_dir: str
+        output_dir: str,
+        horizon: str = '6M'  # ✅ NEW PARAMETER: '3M' or '6M'
 ) -> Optional[str]:
     """
     Strategy performance across bull/neutral/bear markets vs BUFR.
 
     Shows how bullish and defensive strategies perform in each regime.
+
+    Parameters:
+        future_regime_df: Forward regime analysis DataFrame
+        optimal_strategies: Dict of optimal strategies by regime
+        output_dir: Directory to save plots
+        horizon: '3M' or '6M' forward window
     """
-    print("\n  Generating: Regime Performance with BUFR...")
+    print(f"\n  Generating: Regime Performance with BUFR ({horizon})...")
 
     if future_regime_df.empty or not optimal_strategies:
         print("    ⚠ No regime data - skipping")
@@ -592,38 +623,30 @@ def plot_regime_performance_with_bufr(
     strategy_bullish = bull_strats.iloc[0]
     strategy_defensive = bear_strats.iloc[0]
 
-    # DIAGNOSTIC: Print available columns
-    print(f"\n    DEBUG: future_regime_df columns:")
-    print(f"    {list(future_regime_df.columns)[:10]}...")  # First 10 columns
-    print(f"    Total columns: {len(future_regime_df.columns)}")
-
-    # Detect horizon
-    if 'future_regime_3m' in future_regime_df.columns:
+    # ✅ Use horizon parameter to select columns
+    if horizon == '3M':
         regime_col = 'future_regime_3m'
-        return_col_suffix = '_3m'
-        horizon = '3M'
-    elif 'future_regime_6m' in future_regime_df.columns:
+        strat_return_col = 'forward_3m_return'
+        bufr_return_col = 'bufr_forward_3m_return'
+    else:  # 6M
         regime_col = 'future_regime_6m'
-        return_col_suffix = '_6m'
-        horizon = '6M'
-    else:
-        print("    ⚠ No regime classification column - skipping")
+        strat_return_col = 'forward_6m_return'
+        bufr_return_col = 'bufr_forward_6m_return'
+
+    # Verify columns exist
+    if regime_col not in future_regime_df.columns:
+        print(f"    ⚠ Column '{regime_col}' not found - skipping")
         return None
-
-    # Column names based on actual DataFrame structure
-    strat_return_col = f'forward{return_col_suffix}_return'
-    bufr_return_col = f'bufr_forward{return_col_suffix}_return'
-
-    print(f"    Using columns: '{strat_return_col}', '{bufr_return_col}'")
 
     if strat_return_col not in future_regime_df.columns:
         print(f"    ⚠ Column '{strat_return_col}' not found - skipping")
-        print(f"    Available return columns: {[c for c in future_regime_df.columns if 'return' in c.lower()]}")
         return None
 
     if bufr_return_col not in future_regime_df.columns:
         print(f"    ⚠ Column '{bufr_return_col}' not found - skipping")
         return None
+
+    print(f"    Using columns: '{strat_return_col}', '{bufr_return_col}'")
 
     # Collect performance data
     regimes = ['bull', 'neutral', 'bear']
@@ -645,14 +668,14 @@ def plot_regime_performance_with_bufr(
             (regime_data['launch_month'] == strategy_bullish['launch_month']) &
             (regime_data['trigger_type'] == strategy_bullish['trigger_type']) &
             (regime_data['selection_algo'] == strategy_bullish['selection_algo'])
-        ]
+            ]
 
         # Get defensive strategy performance
         defensive_data = regime_data[
             (regime_data['launch_month'] == strategy_defensive['launch_month']) &
             (regime_data['trigger_type'] == strategy_defensive['trigger_type']) &
             (regime_data['selection_algo'] == strategy_defensive['selection_algo'])
-        ]
+            ]
 
         # Extract returns
         if not bullish_data.empty:
@@ -663,15 +686,12 @@ def plot_regime_performance_with_bufr(
         else:
             bullish_returns.append(0)
             bufr_returns.append(0)
-            bull_ret = 0
-            bufr_ret = 0
 
         if not defensive_data.empty:
             def_ret = defensive_data[strat_return_col].mean()
             defensive_returns.append(def_ret)
         else:
             defensive_returns.append(0)
-            def_ret = 0
 
     # Create visualization
     fig, ax = plt.subplots(figsize=(14, 8))
@@ -712,7 +732,7 @@ def plot_regime_performance_with_bufr(
     # Formatting
     ax.set_xlabel(f'Market Regime ({horizon} Forward)', fontsize=13, fontweight='bold')
     ax.set_ylabel('Strategy Return (%)', fontsize=13, fontweight='bold')
-    ax.set_title('Strategy Performance Across Market Regimes (vs BUFR)',
+    ax.set_title(f'Strategy Performance Across Market Regimes ({horizon} Forward vs BUFR)',
                  fontsize=15, fontweight='bold', pad=20)
     ax.set_xticks(x)
     ax.set_xticklabels(['Bull', 'Neutral', 'Bear'], fontsize=12)
@@ -722,14 +742,13 @@ def plot_regime_performance_with_bufr(
 
     plt.tight_layout()
 
-    filename = 'regime_performance_with_bufr.png'
+    filename = f'regime_performance_{horizon.lower()}_with_bufr.png'  # ✅ Horizon in filename
     filepath = os.path.join(output_dir, filename)
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
     plt.close()
 
     print(f"    ✓ Saved: {filename}")
     return filepath
-
 
 # =============================================================================
 # PLOT 5: PERFORMANCE METRICS BARS (INTENT-BASED)
@@ -912,11 +931,13 @@ def generate_batch_visualizations(
             print(f"    Bull strategies: {len(optimal_strategies['bull'])}")
             print(f"    Bear strategies: {len(optimal_strategies['bear'])}")
 
-            filepath = plot_regime_performance_with_bufr(
-                future_regime_df, optimal_strategies, output_dir
-            )
-            if filepath:
-                generated_plots['regime_performance'] = filepath
+            # ✅ Generate BOTH 3M and 6M charts
+            for horizon in ['3M', '6M']:
+                filepath = plot_regime_performance_with_bufr(
+                    future_regime_df, optimal_strategies, output_dir, horizon=horizon
+                )
+                if filepath:
+                    generated_plots[f'regime_performance_{horizon.lower()}'] = filepath
         else:
             print(f"\n  ⚠ Skipping regime performance plot:")
             print(f"    Bull strategies available: {has_bull}")
@@ -996,3 +1017,150 @@ def create_all_plots(
         output_dir=output_dir,
         batch_number=None
     )
+
+
+# Add to visualization/performance_plots.py
+
+def plot_cross_batch_comparison(
+        all_summaries: Dict[int, pd.DataFrame],
+        output_dir: str
+):
+    """
+    Compare best strategies across different batches.
+
+    Creates:
+    1. Bar chart comparing key metrics across batches
+    2. Summary table showing best strategy from each batch
+
+    Parameters:
+        all_summaries: Dict mapping batch_num -> summary DataFrame
+        output_dir: Directory to save comparison plots
+    """
+    print("\n" + "=" * 80)
+    print("GENERATING CROSS-BATCH COMPARISON")
+    print("=" * 80)
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Find best strategy from each batch (by Sharpe ratio)
+    best_by_batch = {}
+
+    for batch_num, summary_df in all_summaries.items():
+        if summary_df.empty:
+            continue
+
+        best_idx = summary_df['strategy_sharpe'].idxmax()
+        best_row = summary_df.loc[best_idx].copy()
+        best_by_batch[batch_num] = best_row
+
+        print(f"\nBatch {batch_num}: {best_row['batch_name']}")
+        print(f"  Best strategy: {best_row['launch_month']} | {best_row['trigger_type']}")
+        print(f"  Sharpe: {best_row['strategy_sharpe']:.2f}")
+        print(f"  Return: {best_row['strategy_return'] * 100:.2f}%")
+        print(f"  vs BUFR: {best_row['vs_bufr_excess'] * 100:+.2f}%")
+
+    if not best_by_batch:
+        print("⚠️ No valid batch results found")
+        return
+
+    # Create comparison DataFrame
+    comparison_df = pd.DataFrame(best_by_batch).T
+
+    # =========================================================================
+    # PLOT: Metrics Comparison Bar Chart
+    # =========================================================================
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+    fig.suptitle('Best Strategy Comparison Across Batches', fontsize=16, fontweight='bold')
+
+    colors = ['#2E7D32', '#1565C0', '#F57C00', '#E53935']
+    batch_nums = list(best_by_batch.keys())
+    batch_labels = [f"Batch {n}" for n in batch_nums]
+
+    # Sharpe Ratio
+    ax1 = axes[0, 0]
+    sharpes = [best_by_batch[n]['strategy_sharpe'] for n in batch_nums]
+    bars1 = ax1.bar(batch_labels, sharpes, color=colors[:len(batch_nums)])
+    ax1.set_title('Sharpe Ratio', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('Sharpe Ratio')
+    ax1.grid(axis='y', alpha=0.3)
+
+    # Add value labels
+    for bar, val in zip(bars1, sharpes):
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width() / 2., height,
+                 f'{val:.2f}', ha='center', va='bottom', fontweight='bold')
+
+    # Total Return
+    ax2 = axes[0, 1]
+    returns = [best_by_batch[n]['strategy_return'] * 100 for n in batch_nums]
+    bars2 = ax2.bar(batch_labels, returns, color=colors[:len(batch_nums)])
+    ax2.set_title('Total Return', fontsize=12, fontweight='bold')
+    ax2.set_ylabel('Return (%)')
+    ax2.grid(axis='y', alpha=0.3)
+
+    for bar, val in zip(bars2, returns):
+        height = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width() / 2., height,
+                 f'{val:.1f}%', ha='center', va='bottom', fontweight='bold')
+
+    # Excess vs BUFR
+    ax3 = axes[1, 0]
+    excess_bufr = [best_by_batch[n]['vs_bufr_excess'] * 100 for n in batch_nums]
+    bars3 = ax3.bar(batch_labels, excess_bufr, color=colors[:len(batch_nums)])
+    ax3.set_title('Excess Return vs BUFR', fontsize=12, fontweight='bold')
+    ax3.set_ylabel('Excess Return (%)')
+    ax3.axhline(y=0, color='black', linestyle='-', linewidth=0.8)
+    ax3.grid(axis='y', alpha=0.3)
+
+    for bar, val in zip(bars3, excess_bufr):
+        height = bar.get_height()
+        va = 'bottom' if height > 0 else 'top'
+        ax3.text(bar.get_x() + bar.get_width() / 2., height,
+                 f'{val:+.1f}%', ha='center', va=va, fontweight='bold')
+
+    # Max Drawdown
+    ax4 = axes[1, 1]
+    max_dds = [best_by_batch[n]['strategy_max_dd'] * 100 for n in batch_nums]
+    bars4 = ax4.bar(batch_labels, max_dds, color=colors[:len(batch_nums)])
+    ax4.set_title('Maximum Drawdown', fontsize=12, fontweight='bold')
+    ax4.set_ylabel('Max Drawdown (%)')
+    ax4.axhline(y=0, color='black', linestyle='-', linewidth=0.8)
+    ax4.grid(axis='y', alpha=0.3)
+
+    for bar, val in zip(bars4, max_dds):
+        height = bar.get_height()
+        ax4.text(bar.get_x() + bar.get_width() / 2., height,
+                 f'{val:.1f}%', ha='center', va='top', fontweight='bold')
+
+    plt.tight_layout()
+
+    filename = 'cross_batch_metrics_comparison.png'
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"\n  ✓ Saved: {filename}")
+
+    # =========================================================================
+    # EXPORT: Summary Table
+    # =========================================================================
+
+    summary_table = comparison_df[[
+        'batch_name', 'launch_month', 'trigger_type', 'selection_algo',
+        'strategy_return', 'strategy_sharpe', 'strategy_max_dd',
+        'vs_bufr_excess', 'vs_spy_excess', 'num_trades'
+    ]].copy()
+
+    summary_table.to_excel(
+        os.path.join(output_dir, 'cross_batch_summary.xlsx'),
+        index_label='Batch'
+    )
+
+    print(f"  ✓ Saved: cross_batch_summary.xlsx")
+
+    print("\n" + "=" * 80)
+    print(f"✅ CROSS-BATCH COMPARISON COMPLETE")
+    print(f"   Output: {output_dir}")
+    print("=" * 80 + "\n")
+

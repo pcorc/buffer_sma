@@ -47,22 +47,29 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         print(f"ERROR: No data for fund {current_fund}")
         return None
 
-    start_date = fund_data['Date'].min()
     BUFR_INCEPTION = pd.Timestamp('2020-07-01')
 
-    # Start at the later of: fund launch OR BUFR inception
-    fund_launch = fund_data['Date'].min()
-    start_date = max(fund_launch, BUFR_INCEPTION)
+    # Get the first roll date for this fund (already filtered to >= July 2020 in preprocessing)
+    fund_roll_dates = fund_data['Roll_Date'].dropna().unique()
 
-    # If start_date is before the fund's actual launch month, advance to next occurrence
-    if start_date < fund_launch:
-        start_date = fund_launch
+    if len(fund_roll_dates) == 0:
+        print(f"ERROR: No valid roll dates for fund {current_fund}")
+        return None
 
+    # Start at the first roll date (this is already >= July 2020 from preprocessing)
+    first_roll_date = pd.Timestamp(sorted(fund_roll_dates)[0])
+
+    # Ensure we also have benchmark data from this date
+    start_date = max(first_roll_date, BUFR_INCEPTION)
+
+    # Filter fund data to start from this aligned date
+    fund_data = fund_data[fund_data['Date'] >= start_date].copy()
+
+    if fund_data.empty:
+        print(f"ERROR: No fund data after alignment date {start_date.date()}")
+        return None
 
     end_date = fund_data['Date'].max()
-
-    print(f"Period: {start_date.date()} to {end_date.date()}")
-    print(f"Starting fund: {current_fund}")
 
     # Prepare benchmark data
     df_bench = df_benchmarks.copy()

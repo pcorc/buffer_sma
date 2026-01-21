@@ -38,9 +38,6 @@ def analyze_by_future_regime(results_list, df_forward_regimes, entry_frequency='
         print("ERROR: No results to analyze!")
         return pd.DataFrame()
 
-    print("\n" + "=" * 80)
-    print("ANALYZING PERFORMANCE BY FUTURE REGIME (MULTIPLE ENTRY POINTS)")
-
     future_regime_records = []
     total_entries = 0
     skipped_entries = 0
@@ -155,8 +152,6 @@ def analyze_by_future_regime(results_list, df_forward_regimes, entry_frequency='
             future_regime_records.append(record)
 
     future_regime_df = pd.DataFrame(future_regime_records)
-
-    print("=" * 80 + "\n")
 
     return future_regime_df
 
