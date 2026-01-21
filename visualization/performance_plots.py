@@ -323,20 +323,23 @@ def plot_best_strategies_comparison(
         }
 
     else:
-        # Single intent: show top 3 by different criteria
+        # Single intent: show top 3 strategies by Sharpe
+        top_3 = summary_df.nlargest(3, 'strategy_sharpe')
+
         best = {}
-        best['best_sharpe'] = summary_df.loc[summary_df['strategy_sharpe'].idxmax()]
-        best['best_return'] = summary_df.loc[summary_df['strategy_return'].idxmax()]
-        best['best_vs_bufr'] = summary_df.loc[summary_df['vs_bufr_excess'].idxmax()]
+        strategy_ids = {}
+        strategy_rows = {}
+        labels = {}
+        colors = {}
+        color_palette = ['#2E7D32', '#1565C0', '#F57C00']  # Green, Blue, Orange
 
-        strategy_ids = {k: _create_strategy_id(v) for k, v in best.items()}
-        strategy_rows = best
-
-        labels = {
-            'best_sharpe': 'Best Sharpe Ratio',
-            'best_return': 'Best Total Return',
-            'best_vs_bufr': 'Best vs BUFR'
-        }
+        for i, (idx, row) in enumerate(top_3.iterrows(), 1):
+            key = f'top_{i}'
+            best[key] = row
+            strategy_ids[key] = _create_strategy_id(row)
+            strategy_rows[key] = row
+            labels[key] = f'#{i}: Sharpe {row["strategy_sharpe"]:.2f}'
+            colors[key] = color_palette[i-1]  # NEW: Assign color
 
     # Plot strategies
     plotted_strategies = []
@@ -347,8 +350,10 @@ def plot_best_strategies_comparison(
             if result_id == strat_id:
                 daily_nav = result['daily_performance']
 
-                # Color based on intent or criteria
-                if 'bullish' in key:
+                # Determine color
+                if key in colors:
+                    color = colors[key]
+                elif 'bullish' in key:
                     color = INTENT_COLORS['bullish']['best']
                 elif 'bearish' in key:
                     color = INTENT_COLORS['bearish']['best']
@@ -365,7 +370,7 @@ def plot_best_strategies_comparison(
                         color=color, linewidth=2.5, alpha=0.9,
                         label=labels[key], zorder=10)
 
-                plotted_strategies.append((key, strategy_rows[key]))
+                plotted_strategies.append((key, strategy_rows[key], color))  # ✅ Always 3-tuple
                 break
 
     # Plot benchmarks
@@ -383,13 +388,27 @@ def plot_best_strategies_comparison(
     # Add text box with strategy details
     textstr_lines = ['STRATEGY DETAILS\n' + '─' * 40]
 
-    for i, (key, row) in enumerate(plotted_strategies):
+    for i, (key, row, color) in enumerate(plotted_strategies):  # ✅ Unpack 3 values
         if i > 0:
             textstr_lines.append('')  # Blank line between strategies
 
+        # Convert hex color to RGB name for display
+        color_names = {
+            '#2E7D32': '■ Green',
+            '#1565C0': '■ Blue',
+            '#F57C00': '■ Orange',
+            INTENT_COLORS['bullish']['best']: '■ Green',
+            INTENT_COLORS['bearish']['best']: '■ Red',
+            INTENT_COLORS['neutral']['best']: '■ Blue',
+        }
+
+        color_label = color_names.get(color, '■')
+
         # Get intent for label
-        if 'bullish' in key:
-            label = 'Bullish:'
+        if 'top_' in key:
+            label = f'{color_label} Rank #{key.split("_")[1]}:'  # NEW: Add color box
+        elif 'bullish' in key:
+            label = f'{color_label} Bullish:'
         elif 'bearish' in key:
             label = 'Bearish:'
         elif 'neutral' in key:

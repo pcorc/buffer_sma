@@ -41,7 +41,7 @@ sys.path.insert(0, project_root)
 # CONFIGURATION: SELECT BATCH TO RUN
 # ============================================================================
 
-BATCH_NUMBER = 0  # Change this to run different batches (1-6)
+BATCH_NUMBER = 7  # Change this to run different batches (1-6)
 
 # TESTER
 # AUSTIN SCHULTZ CURRENT
@@ -90,7 +90,7 @@ def get_batch_7_configs():
     """
     configs = []
 
-    months = ['JAN', 'OCT',]
+    months = ['JAN', ]
 
     # # BULLISH STRATEGIES (3)
     # configs.append({
@@ -126,6 +126,13 @@ def get_batch_7_configs():
         'trigger_type': 'cap_utilization_threshold',
         'trigger_params': {'threshold': 0.75},
         'selection_func_name': 'select_downside_buffer_lowest',  # Bearish (overlaps with bullish)
+        'launch_months': months
+    })
+
+    configs.append({
+        'trigger_type': 'remaining_cap_threshold',
+        'trigger_params': {'threshold': 0.75},
+        'selection_func_name': 'select_most_recent_launch',
         'launch_months': months
     })
 
