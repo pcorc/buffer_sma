@@ -256,7 +256,7 @@ def main():
     all_batch_results = {}
 
     # Run each batch
-    batches_to_run = [0, 1, 2, 3]
+    batches_to_run = [1, 2, 3]
 
     for batch_num in batches_to_run:
         try:

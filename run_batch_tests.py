@@ -41,7 +41,7 @@ sys.path.insert(0, project_root)
 # CONFIGURATION: SELECT BATCH TO RUN
 # ============================================================================
 
-BATCH_NUMBER = 5  # Change this to run different batches (1-6)
+BATCH_NUMBER = 8  # Change this to run different batches (1-6)
 
 # TESTER
 # AUSTIN SCHULTZ CURRENT
@@ -65,9 +65,6 @@ def get_batch_0_configs():
     threshold_levels = [0.25, 0.40, 0.75, 0.90]
 
     # All launch months for fair comparison
-    months = ['FEB', 'MAR', 'MAY', 'JUN',
-              'JUL', 'AUG', 'SEP', 'NOV', 'DEC']
-
     months = ['SEP']
 
     for threshold in threshold_levels:
@@ -138,7 +135,7 @@ def get_batch_2_configs():
     """
     configs = []
 
-    thresholds = [0.50, 0.75]
+    thresholds = [0.50, 0.75, 0.90]
     months = ['SEP']
 
     bullish_selections = [
@@ -184,8 +181,8 @@ def get_batch_3_configs():
     """
     configs = []
 
-    thresholds = [0.25, 0.50]
-    months = ['SEP']
+    thresholds = [0.50, 0.75, 0.90]
+    months = ['JAN']
 
     bullish_selections = [
         'select_cap_utilization_lowest',
@@ -488,69 +485,128 @@ def get_batch_5_configs():
 # random
 def get_batch_7_configs():
     """
-    BATCH 0: Quick Test - 6 Strategies (3 Bullish + 3 Bearish)
-    ~24 simulations, ~7 minutes
+    BATCH 7: Four Specific Strategy Comparison (SEP Month Only)
+    Tests: 4 strategies × 1 month = 4 simulations
+    Estimated time: ~1-2 minutes
 
-    Used to verify regime classification and Excel export tabs
+    Purpose: Direct comparison of 4 specific trigger/selection combinations
+    to evaluate how different entry/exit logic and selection criteria interact.
+
+    Strategies:
+    1. Remaining Cap (75%) → Highest Remaining Cap
+       - Exit: When 75% cap remaining (early/bullish exit)
+       - Select: Fund with most upside potential (bullish selection)
+       - Intent: Double bullish (capture upside aggressively)
+
+    2. Cap Utilization (75%) → Highest Utilization
+       - Exit: When 75% cap used (late/bearish exit)
+       - Select: Fund with least upside remaining (bearish selection)
+       - Intent: Double bearish (conservative positioning)
+
+    3. Cap Utilization (75%) → Lowest Utilization
+       - Exit: When 75% cap used (late/bearish exit)
+       - Select: Fund with most upside remaining (bullish selection)
+       - Intent: Hybrid (patient exit, aggressive selection)
+
+    4. Downside Buffer (50%) → Lowest Utilization
+       - Exit: When 50% before buffer (defensive exit)
+       - Select: Fund with most upside remaining (bullish selection)
+       - Intent: Hybrid (risk-aware exit, aggressive selection)
     """
     configs = []
 
-    months = ['JAN', ]
+    # Only SEP month for direct comparison
+    months = ['OCT']
 
-    # # BULLISH STRATEGIES (3)
-    # configs.append({
-    #     'trigger_type': 'rebalance_time_period',
-    #     'trigger_params': {'frequency': 'quarterly'},
-    #     'selection_func_name': 'select_cap_utilization_lowest',  # Bullish
-    #     'launch_months': months
-    # })
-    #
-    # configs.append({
-    #     'trigger_type': 'cap_utilization_threshold',
-    #     'trigger_params': {'threshold': 0.75},
-    #     'selection_func_name': 'select_remaining_cap_highest',  # Bullish
-    #     'launch_months': months
-    # })
-    #
-    # configs.append({
-    #     'trigger_type': 'remaining_cap_threshold',
-    #     'trigger_params': {'threshold': 0.50},
-    #     'selection_func_name': 'select_downside_buffer_lowest',  # Bullish
-    #     'launch_months': months
-    # })
-
-    # BEARISH STRATEGIES (3)
-    configs.append({
-        'trigger_type': 'rebalance_time_period',
-        'trigger_params': {'frequency': 'quarterly'},
-        'selection_func_name': 'select_downside_buffer_highest',  # Bearish
-        'launch_months': months
-    })
-
-    configs.append({
-        'trigger_type': 'cap_utilization_threshold',
-        'trigger_params': {'threshold': 0.75},
-        'selection_func_name': 'select_downside_buffer_lowest',  # Bearish (overlaps with bullish)
-        'launch_months': months
-    })
-
+    # =========================================================================
+    # Strategy 1: Remaining Cap 75% → Highest Remaining Cap
+    # =========================================================================
     configs.append({
         'trigger_type': 'remaining_cap_threshold',
-        'trigger_params': {'threshold': 0.75},
-        'selection_func_name': 'select_most_recent_launch',
-        'launch_months': months
+        'trigger_params': {'threshold': 0.75},  # Switch when 75% cap remaining
+        'selection_func_name': 'select_remaining_cap_highest',
+        'launch_months': months,
+        'description': 'Remaining Cap 75% → Highest Cap (Double Bullish)'
     })
 
-    # configs.append({
-    #     'trigger_type': 'remaining_cap_threshold',
-    #     'trigger_params': {'threshold': 0.50},
-    #     'selection_func_name': 'select_cap_utilization_lowest',  # Bearish (overlaps with bullish)
-    #     'launch_months': months
-    # })
+    # =========================================================================
+    # Strategy 2: Cap Utilization 75% → Highest Utilization
+    # =========================================================================
+    configs.append({
+        'trigger_type': 'cap_utilization_threshold',
+        'trigger_params': {'threshold': 0.75},  # Switch when 75% cap utilized
+        'selection_func_name': 'select_cap_utilization_highest',
+        'launch_months': months,
+        'description': 'Cap Util 75% → Highest Util (Double Bearish)'
+    })
+
+    # =========================================================================
+    # Strategy 3: Cap Utilization 75% → Lowest Utilization
+    # =========================================================================
+    configs.append({
+        'trigger_type': 'cap_utilization_threshold',
+        'trigger_params': {'threshold': 0.75},  # Switch when 75% cap utilized
+        'selection_func_name': 'select_cap_utilization_lowest',
+        'launch_months': months,
+        'description': 'Cap Util 75% → Lowest Util (Hybrid: Late exit → Fresh cap)'
+    })
+
+    # =========================================================================
+    # Strategy 4: Downside Buffer 50% → Lowest Utilization
+    # =========================================================================
+    configs.append({
+        'trigger_type': 'downside_before_buffer_threshold',
+        'trigger_params': {'threshold': 0.50},  # Switch at 50% before buffer
+        'selection_func_name': 'select_cap_utilization_lowest',
+        'launch_months': months,
+        'description': 'Downside 50% → Lowest Util (Hybrid: Buffer threat → Fresh cap)'
+    })
 
     return configs
 
 
+def get_batch_8_configs():
+    """
+    BATCH 8: Comprehensive Threshold Analysis
+    Tests: 4 thresholds × 12 months = 48 simulations
+    Estimated time: ~15 minutes
+
+    Purpose: Demonstrate that 90% threshold underperforms compared to alternatives.
+    Tests thresholds: 25%, 40%, 75%, 90%
+    Strategy: cap_utilization_threshold + select_most_recent_launch
+
+    This batch provides empirical evidence that:
+    1. Very high thresholds (90%) result in excessive cap erosion before rebalancing
+    2. Mid-range thresholds (40-75%) offer better risk/return tradeoff
+    3. Very low thresholds (25%) may trade too frequently with diminishing returns
+
+    Generates:
+    - Bar chart comparing average performance across thresholds
+    - Integrated performance table with detailed statistics
+    - CSV export for further analysis
+    - Clear ranking showing 90% as suboptimal choice
+    """
+    configs = []
+
+    # Test these specific thresholds
+    threshold_levels = [0.25, 0.40, 0.75, 0.90]
+
+    # All 12 launch months for comprehensive averaging
+    # This eliminates timing bias by testing across all possible entry points
+    months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+              'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+
+    # Create configuration for each threshold
+    for threshold in threshold_levels:
+        configs.append({
+            'trigger_type': 'cap_utilization_threshold',
+            'trigger_params': {'threshold': threshold},
+            'selection_func_name': 'select_most_recent_launch',
+            'launch_months': months,
+            'description': f'Cap Utilization {int(threshold * 100)}% → Most Recent Launch'
+        })
+
+    return configs
 
 # ============================================================================
 # BATCH SELECTOR
@@ -563,7 +619,8 @@ BATCH_CONFIGS = {
     3: get_batch_3_configs,
     4: get_batch_4_configs,
     5: get_batch_5_configs,
-    7: get_batch_7_configs  # ← ADD THIS
+    7: get_batch_7_configs,  # ← ADD THIS
+    8: get_batch_7_configs  # ← ADD THIS
 }
 
 BATCH_DESCRIPTIONS = {
@@ -573,7 +630,9 @@ BATCH_DESCRIPTIONS = {
     3: "Remaining Cap Tactical",
     4: "Market-Responsive (Ref Asset + Buffer)",
     5: "Comprehensive Regime-Optimized (180 sims, 6 months, expanded thresholds)",
-    7: "Random Assortment"  # ← ADD THIS
+    7: "Random Assortment",  # ← ADD THIS
+    8: "Schultz"  # ← ADD THIS
+
 }
 
 
@@ -592,22 +651,9 @@ def main():
 
     print("\n" + "=" * 80)
     print(f"BATCH {BATCH_NUMBER}: {BATCH_DESCRIPTIONS[BATCH_NUMBER]}")
-    print("=" * 80 + "\n")
 
     # Get batch configurations
     batch_configs = BATCH_CONFIGS[BATCH_NUMBER]()
-
-
-
-
-
-
-
-
-
-
-
-    print(f"This batch will run {len(batch_configs)} trigger/selection combinations")
 
     # Calculate total simulations (configs * launch_months)
     total_sims = sum(len(config['launch_months']) for config in batch_configs)
@@ -665,7 +711,6 @@ def main():
     # Run backtests
     print(f"\n{'=' * 80}")
     print(f"RUNNING BATCH {BATCH_NUMBER} BACKTESTS")
-    print(f"{'=' * 80}\n")
 
     results_list = run_all_single_ticker_tests(
         df_enriched=df_enriched,
@@ -680,7 +725,6 @@ def main():
         return
 
     # Analyze
-    print("\nAnalyzing results...")
     summary_df = consolidate_results(results_list)
 
     # Forward regime analysis

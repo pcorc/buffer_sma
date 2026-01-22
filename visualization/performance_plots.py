@@ -303,181 +303,6 @@ def plot_all_strategies_with_best(
 
 
 # =============================================================================
-# PLOT 2: BEST STRATEGIES COMPARISON
-# =============================================================================
-
-def plot_best_strategies_comparison(
-        results_list: List[Dict],
-        summary_df: pd.DataFrame,
-        output_dir: str
-) -> str:
-    """
-    Clean comparison of top-performing strategies only.
-
-    Includes detailed text box showing strategy specifications.
-    """
-    print("\n  Generating: Best Strategies Comparison...")
-
-    summary_df = _ensure_intent_column(summary_df)
-
-    fig, ax = plt.subplots(figsize=(14, 8))
-
-    # Determine what to plot
-    intents = summary_df['strategy_intent'].unique()
-
-    # ✅ ALWAYS initialize colors dict (both paths)
-    colors = {}
-
-    if len(intents) > 1:
-        # Multi-intent: show best of each
-        best = _find_best_strategies(summary_df)
-
-        strategy_ids = {}
-        strategy_rows = {}
-        for key, row in best.items():
-            if key.endswith('_sharpe'):  # Only plot Sharpe-based best
-                strategy_ids[key] = _create_strategy_id(row)
-                strategy_rows[key] = row
-
-                # ✅ Assign colors for multi-intent
-                if 'bullish' in key:
-                    colors[key] = INTENT_COLORS['bullish']['best']
-                elif 'bearish' in key:
-                    colors[key] = INTENT_COLORS['bearish']['best']
-                elif 'neutral' in key:
-                    colors[key] = INTENT_COLORS['neutral']['best']
-                else:
-                    colors[key] = INTENT_COLORS['cost_optimized']['best']
-
-        labels = {
-            'bullish_sharpe': 'Bullish (Best Sharpe)',
-            'bearish_sharpe': 'Bearish (Best Sharpe)',
-            'neutral_sharpe': 'Neutral (Best Sharpe)',
-            'cost_optimized_sharpe': 'Cost-Opt (Best Sharpe)'
-        }
-
-    else:
-        # Single intent: show top 3 strategies by Sharpe
-        top_3 = summary_df.nlargest(3, 'strategy_sharpe')
-
-        best = {}
-        strategy_ids = {}
-        strategy_rows = {}
-        labels = {}
-
-        # ✅ Define colors for single-intent path
-        color_palette = ['#2E7D32', '#1565C0', '#F57C00']  # Green, Blue, Orange
-
-        for i, (idx, row) in enumerate(top_3.iterrows(), 1):
-            key = f'top_{i}'
-            best[key] = row
-            strategy_ids[key] = _create_strategy_id(row)
-            strategy_rows[key] = row
-            labels[key] = f'#{i}: Sharpe {row["strategy_sharpe"]:.2f}'
-            colors[key] = color_palette[i - 1]  # ✅ Assign color
-
-    # Plot strategies
-    plotted_strategies = []
-    for key, strat_id in strategy_ids.items():
-        for result in results_list:
-            result_id = _create_strategy_id(result)
-
-            if result_id == strat_id:
-                daily_nav = result['daily_performance']
-
-                # ✅ Simplified color logic - colors dict always exists now
-                color = colors.get(key, '#666666')  # Fallback gray if key missing
-
-                ax.plot(daily_nav['Date'], daily_nav['Strategy_NAV'],
-                        color=color, linewidth=2.5, alpha=0.9,
-                        label=labels[key], zorder=10)
-
-                plotted_strategies.append((key, strategy_rows[key], color))
-                break
-
-    # Plot benchmarks - find earliest start date across all results
-    if results_list:
-        # Find result with earliest start date
-        earliest_result = min(results_list, key=lambda r: r['daily_performance']['Date'].min())
-        benchmark_nav = _get_earliest_benchmark_data(results_list)
-
-        ax.plot(benchmark_nav['Date'], benchmark_nav['SPY_NAV'],
-                color=BENCHMARK_COLORS['SPY'], linewidth=2.0, linestyle='--',
-                alpha=0.7, label='SPY', zorder=5)
-
-        ax.plot(benchmark_nav['Date'], benchmark_nav['BUFR_NAV'],
-                color=BENCHMARK_COLORS['BUFR'], linewidth=2.0, linestyle=':',
-                alpha=0.7, label='BUFR', zorder=5)
-
-    # Add text box with strategy details
-    textstr_lines = ['STRATEGY DETAILS\n' + '─' * 40]
-
-    for i, (key, row, color) in enumerate(plotted_strategies):  # ✅ Unpack 3 values
-        if i > 0:
-            textstr_lines.append('')  # Blank line between strategies
-
-        # Convert hex color to RGB name for display
-        color_names = {
-            '#2E7D32': '■ Green',
-            '#1565C0': '■ Blue',
-            '#F57C00': '■ Orange',
-            INTENT_COLORS['bullish']['best']: '■ Green',
-            INTENT_COLORS['bearish']['best']: '■ Red',
-            INTENT_COLORS['neutral']['best']: '■ Blue',
-        }
-
-        color_label = color_names.get(color, '■')
-
-        # Get intent for label
-        if 'top_' in key:
-            label = f'{color_label} Rank #{key.split("_")[1]}:'  # NEW: Add color box
-        elif 'bullish' in key:
-            label = f'{color_label} Bullish:'
-        elif 'bearish' in key:
-            label = 'Bearish:'
-        elif 'neutral' in key:
-            label = 'Neutral:'
-        elif key == 'best_sharpe':
-            label = 'Best Sharpe:'
-        elif key == 'best_return':
-            label = 'Best Return:'
-        else:
-            label = 'Best vs BUFR:'
-
-        textstr_lines.append(label)
-        textstr_lines.append(_format_strategy_details(row, include_metrics=True))
-
-    textstr = '\n'.join(textstr_lines)
-
-    # Position in bottom-right
-    props = dict(boxstyle='round', facecolor='wheat', alpha=0.85, edgecolor='black', linewidth=1.5)
-    ax.text(0.98, 0.02, textstr, transform=ax.transAxes, fontsize=9,
-            verticalalignment='bottom', horizontalalignment='right',
-            bbox=props, family='monospace')
-
-    # Formatting
-    ax.set_title('Top Performing Strategies', fontsize=16, fontweight='bold')
-    ax.set_xlabel('Date', fontsize=12)
-    ax.set_ylabel('NAV (Normalized to 100)', fontsize=12)
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc='upper left', fontsize=10, framealpha=0.9)
-
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-    ax.xaxis.set_major_locator(mdates.YearLocator())
-    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
-
-    plt.tight_layout()
-
-    filename = 'best_strategies_comparison.png'
-    filepath = os.path.join(output_dir, filename)
-    plt.savefig(filepath, dpi=300, bbox_inches='tight')
-    plt.close()
-
-    print(f"    ✓ Saved: {filename}")
-    return filepath
-
-
-# =============================================================================
 # PLOT 3: THRESHOLD COMPARISON (SPECIALIZED FOR BATCH 0)
 # =============================================================================
 
@@ -1164,3 +989,705 @@ def plot_cross_batch_comparison(
     print(f"   Output: {output_dir}")
     print("=" * 80 + "\n")
 
+
+"""
+Batch 7 Specialized Visualization: Four-Strategy Direct Comparison
+
+Add this function to visualization/performance_plots.py
+"""
+
+
+def plot_batch_7_four_strategies(
+        results_list: List[Dict],
+        summary_df: pd.DataFrame,
+        output_dir: str
+) -> str:
+    """
+    Batch 7 specialized plot: Four specific strategies vs benchmarks.
+
+    Shows all 4 strategies on one clean chart with benchmarks for direct comparison.
+    Each strategy gets a distinct color and style based on its trigger/selection logic.
+
+    Strategy Color Coding:
+    - Green: Bullish (Remaining Cap 75% → Highest Cap)
+    - Red: Bearish (Cap Util 75% → Highest Util)
+    - Blue: Hybrid Aggressive (Cap Util 75% → Lowest Util)
+    - Orange: Hybrid Defensive (Downside 50% → Lowest Util)
+
+    Parameters:
+        results_list: List of backtest results (should be 4 strategies)
+        summary_df: Summary DataFrame
+        output_dir: Directory to save plot
+
+    Returns:
+        Filepath to saved plot
+    """
+    print("\n  Generating: Batch 7 Four-Strategy Comparison...")
+
+    if len(results_list) != 4:
+        print(f"    ⚠ Expected 4 strategies, got {len(results_list)} - continuing anyway")
+
+    fig, ax = plt.subplots(figsize=(18, 10))
+
+    # Define colors and labels for the 4 strategies
+    strategy_styles = [
+        {
+            'color': '#2E7D32',  # Dark green (bullish)
+            'linestyle': '-',
+            'linewidth': 3.0,
+            'label': 'Strategy 1: RemCap 75% → Highest Cap',
+            'short_label': 'RemCap→High'
+        },
+        {
+            'color': '#D32F2F',  # Dark red (bearish)
+            'linestyle': '-',
+            'linewidth': 3.0,
+            'label': 'Strategy 2: CapUtil 75% → Highest Util',
+            'short_label': 'CapUtil→High'
+        },
+        {
+            'color': '#1565C0',  # Dark blue (hybrid aggressive)
+            'linestyle': '-',
+            'linewidth': 3.0,
+            'label': 'Strategy 3: CapUtil 75% → Lowest Util',
+            'short_label': 'CapUtil→Low'
+        },
+        {
+            'color': '#F57C00',  # Dark orange (hybrid defensive)
+            'linestyle': '-',
+            'linewidth': 3.0,
+            'label': 'Strategy 4: Downside 50% → Lowest Util',
+            'short_label': 'Downside→Low'
+        }
+    ]
+
+    # Sort results to match expected order
+    def sort_key(result):
+        """Sort by trigger type and selection to match strategy_styles order."""
+        trigger = result['trigger_type']
+        selection = result['selection_algo']
+
+        if trigger == 'remaining_cap_threshold':
+            return 0
+        elif trigger == 'cap_utilization_threshold' and selection == 'select_cap_utilization_highest':
+            return 1
+        elif trigger == 'cap_utilization_threshold' and selection == 'select_cap_utilization_lowest':
+            return 2
+        elif trigger == 'downside_before_buffer_threshold':
+            return 3
+        return 99
+
+    sorted_results = sorted(results_list, key=sort_key)
+
+    # Plot each strategy
+    plotted_strategies = []
+
+    for i, (result, style) in enumerate(zip(sorted_results, strategy_styles)):
+        daily = result['daily_performance']
+
+        # Plot strategy NAV
+        ax.plot(daily['Date'], daily['Strategy_NAV'],
+                color=style['color'],
+                linestyle=style['linestyle'],
+                linewidth=style['linewidth'],
+                alpha=0.95,
+                label=style['label'],
+                zorder=10 + i)
+
+        # Store performance data for text box
+        plotted_strategies.append({
+            'number': i + 1,
+            'label': style['label'],
+            'short_label': style['short_label'],
+            'color': style['color'],
+            'return': result['strategy_total_return'],
+            'sharpe': result['strategy_sharpe'],
+            'max_dd': result['strategy_max_dd'],
+            'vs_bufr': result['vs_bufr_excess'],
+            'vs_spy': result['vs_spy_excess'],
+            'trades': result['num_trades'],
+            'launch': result['launch_month'],
+            'trigger': result['trigger_type'],
+            'selection': result['selection_algo']
+        })
+
+    # Plot benchmarks
+    benchmark = _get_earliest_benchmark_data(sorted_results)
+
+    ax.plot(benchmark['Date'], benchmark['SPY_NAV'],
+            color=BENCHMARK_COLORS['SPY'], linewidth=2.5, linestyle='--',
+            alpha=0.75, label='SPY (Benchmark)', zorder=5)
+
+    ax.plot(benchmark['Date'], benchmark['BUFR_NAV'],
+            color=BENCHMARK_COLORS['BUFR'], linewidth=2.5, linestyle=':',
+            alpha=0.75, label='BUFR (Benchmark)', zorder=5)
+
+    # Add detailed performance text box
+    textstr_lines = ['PERFORMANCE SUMMARY\n' + '═' * 55]
+
+    # Find best performer by Sharpe
+    best_sharpe_idx = max(range(len(plotted_strategies)),
+                          key=lambda i: plotted_strategies[i]['sharpe'])
+
+    # Find best vs BUFR
+    best_bufr_idx = max(range(len(plotted_strategies)),
+                        key=lambda i: plotted_strategies[i]['vs_bufr'])
+
+    for i, strat in enumerate(plotted_strategies):
+        if i > 0:
+            textstr_lines.append('')  # Blank line between strategies
+
+        # Add marker for best performers
+        marker = ''
+        if i == best_sharpe_idx and i == best_bufr_idx:
+            marker = ' ★ BEST OVERALL'
+        elif i == best_sharpe_idx:
+            marker = ' ★ BEST SHARPE'
+        elif i == best_bufr_idx:
+            marker = ' ★ BEST VS BUFR'
+
+        textstr_lines.append(f"Strategy {strat['number']}: {strat['short_label']}{marker}")
+        textstr_lines.append(f"  Return:   {strat['return'] * 100:+7.2f}%  |  Sharpe: {strat['sharpe']:6.2f}")
+        textstr_lines.append(f"  vs BUFR:  {strat['vs_bufr'] * 100:+7.2f}%  |  vs SPY: {strat['vs_spy'] * 100:+7.2f}%")
+        textstr_lines.append(f"  Max DD:   {strat['max_dd'] * 100:7.2f}%  |  Trades: {strat['trades']:6.0f}")
+
+    # Add benchmark performance
+    textstr_lines.append('\n' + '─' * 55)
+    textstr_lines.append('BENCHMARKS:')
+
+    spy_return = (benchmark['SPY_NAV'].iloc[-1] / 100 - 1) * 100
+    bufr_return = (benchmark['BUFR_NAV'].iloc[-1] / 100 - 1) * 100
+
+    textstr_lines.append(f"  SPY:  {spy_return:+7.2f}%")
+    textstr_lines.append(f"  BUFR: {bufr_return:+7.2f}%")
+
+    textstr = '\n'.join(textstr_lines)
+
+    # Position text box in bottom-right
+    props = dict(boxstyle='round,pad=0.8', facecolor='wheat', alpha=0.92,
+                 edgecolor='black', linewidth=2)
+    ax.text(0.98, 0.02, textstr, transform=ax.transAxes, fontsize=9.5,
+            verticalalignment='bottom', horizontalalignment='right',
+            bbox=props, family='monospace', linespacing=1.4)
+
+    # Formatting
+    ax.set_title('Four-Strategy Direct Comparison: Different Trigger/Selection Logic (SEP Launch)',
+                 fontsize=17, fontweight='bold', pad=20)
+    ax.set_xlabel('Date', fontsize=14, fontweight='bold')
+    ax.set_ylabel('NAV (Normalized to 100)', fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3, linestyle=':', linewidth=1)
+
+    # Legend with better positioning
+    ax.legend(loc='upper left', fontsize=11, framealpha=0.95,
+              edgecolor='black', fancybox=True, shadow=True)
+
+    # Format x-axis
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+    ax.xaxis.set_major_locator(mdates.YearLocator())
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # Add horizontal line at NAV=100
+    ax.axhline(y=100, color='gray', linestyle='-', linewidth=0.8, alpha=0.3, zorder=1)
+
+    plt.tight_layout()
+
+    # Save with high DPI for clarity
+    filename = 'batch7_four_strategy_comparison.png'
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"    ✓ Saved: {filename}")
+
+    # Print summary to console as well
+    print("\n  Strategy Rankings:")
+    ranked = sorted(plotted_strategies, key=lambda s: s['sharpe'], reverse=True)
+    for i, strat in enumerate(ranked, 1):
+        print(f"    {i}. {strat['short_label']:15s} | "
+              f"Sharpe: {strat['sharpe']:5.2f} | "
+              f"vs BUFR: {strat['vs_bufr'] * 100:+6.2f}%")
+
+    return filepath
+
+
+# =============================================================================
+# BATCH 8 SPECIALIZED PLOT: Threshold Performance with Table
+# =============================================================================
+
+def plot_threshold_performance_with_table(
+        summary_df: pd.DataFrame,
+        output_dir: str
+) -> Optional[str]:
+    """
+    Comprehensive threshold analysis with integrated performance table.
+
+    Shows:
+    1. Bar chart of average excess vs BUFR by threshold
+    2. Integrated table with detailed statistics
+    3. Visual ranking highlighting 90% underperformance
+
+    Only relevant for batches testing cap_utilization_threshold.
+
+    Parameters:
+        summary_df: Summary DataFrame with all results
+        output_dir: Directory to save plot
+
+    Returns:
+        Filepath if successful, None otherwise
+    """
+    import ast
+
+    print("\n  Generating: Threshold Performance Analysis with Table...")
+
+    # Extract threshold values
+    def extract_threshold(params_str):
+        try:
+            params_dict = ast.literal_eval(params_str)
+            return params_dict.get('threshold', None)
+        except:
+            return None
+
+    summary_df_copy = summary_df.copy()
+    summary_df_copy['threshold_value'] = summary_df_copy['trigger_params'].apply(extract_threshold)
+
+    # Filter to threshold strategies with correct selection algo
+    threshold_data = summary_df_copy[
+        (summary_df_copy['trigger_type'] == 'cap_utilization_threshold') &
+        (summary_df_copy['selection_algo'] == 'select_most_recent_launch') &
+        (summary_df_copy['threshold_value'].notna())
+        ].copy()
+
+    if threshold_data.empty:
+        print("    ⚠ No threshold data - skipping")
+        return None
+
+    # Calculate statistics by threshold
+    stats_by_threshold = []
+
+    for threshold in sorted(threshold_data['threshold_value'].unique()):
+        thresh_data = threshold_data[threshold_data['threshold_value'] == threshold]
+
+        avg_excess = thresh_data['vs_bufr_excess'].mean()
+        std_excess = thresh_data['vs_bufr_excess'].std()
+        min_excess = thresh_data['vs_bufr_excess'].min()
+        max_excess = thresh_data['vs_bufr_excess'].max()
+        num_beating = (thresh_data['vs_bufr_excess'] > 0).sum()
+        total_months = len(thresh_data)
+
+        stats_by_threshold.append({
+            'threshold': threshold,
+            'avg_excess': avg_excess,
+            'std_excess': std_excess,
+            'min_excess': min_excess,
+            'max_excess': max_excess,
+            'num_beating': num_beating,
+            'total_months': total_months,
+            'pct_beating': (num_beating / total_months * 100) if total_months > 0 else 0
+        })
+
+    stats_df = pd.DataFrame(stats_by_threshold)
+    stats_df = stats_df.sort_values('avg_excess', ascending=False)  # Best to worst
+
+    # Print summary to console
+    print("\n  Threshold Performance Summary:")
+    print("  " + "=" * 70)
+    for _, row in stats_df.iterrows():
+        print(f"  {int(row['threshold'] * 100):3d}% | "
+              f"Avg: {row['avg_excess'] * 100:+6.2f}% | "
+              f"Std: {row['std_excess'] * 100:5.2f}% | "
+              f"Beat BUFR: {row['num_beating']:.0f}/{row['total_months']:.0f} months")
+    print("  " + "=" * 70)
+
+    # Create figure with adjusted layout
+    fig = plt.figure(figsize=(14, 10))
+
+    # Top: Bar chart (70% of figure height)
+    ax_bar = plt.subplot2grid((10, 1), (0, 0), rowspan=6)
+
+    # Bottom: Table (30% of figure height)
+    ax_table = plt.subplot2grid((10, 1), (7, 0), rowspan=3)
+    ax_table.axis('off')
+
+    # =========================================================================
+    # BAR CHART
+    # =========================================================================
+
+    thresholds_pct = [int(t * 100) for t in stats_df['threshold']]
+    avg_excess_pct = stats_df['avg_excess'].values * 100
+
+    # Color coding: highlight 90% as red, best as green
+    colors = []
+    for i, threshold in enumerate(stats_df['threshold']):
+        if i == 0:  # Best performer
+            colors.append('#2E7D32')  # Dark green
+        elif threshold == 0.90:  # 90% threshold
+            colors.append('#D32F2F')  # Red
+        else:
+            colors.append('#1976D2')  # Blue
+
+    bars = ax_bar.bar(range(len(thresholds_pct)), avg_excess_pct,
+                      color=colors, alpha=0.85, edgecolor='black', linewidth=2)
+
+    # Add value labels on bars
+    for bar, val in zip(bars, avg_excess_pct):
+        height = bar.get_height()
+        y_pos = height + 0.15 if height > 0 else height - 0.15
+        va = 'bottom' if height > 0 else 'top'
+
+        ax_bar.text(bar.get_x() + bar.get_width() / 2, y_pos,
+                    f'{val:+.2f}%',
+                    ha='center', va=va, fontsize=12, fontweight='bold')
+
+    # Formatting
+    ax_bar.set_xticks(range(len(thresholds_pct)))
+    ax_bar.set_xticklabels([f'{t}%' for t in thresholds_pct], fontsize=12, fontweight='bold')
+    ax_bar.set_ylabel('Average Excess Return vs BUFR (%)', fontsize=13, fontweight='bold')
+    ax_bar.set_title('Cap Utilization Threshold Performance Analysis (Averaged Across 12 Months)',
+                     fontsize=15, fontweight='bold', pad=20)
+    ax_bar.axhline(y=0, color='black', linestyle='--', linewidth=1.5, alpha=0.5)
+    ax_bar.grid(True, alpha=0.3, axis='y', linestyle=':')
+
+    # Add ranking labels
+    for i, (bar, rank) in enumerate(zip(bars, range(1, len(bars) + 1))):
+        ax_bar.text(bar.get_x() + bar.get_width() / 2, ax_bar.get_ylim()[1] * 0.95,
+                    f'Rank #{rank}',
+                    ha='center', va='top', fontsize=10, fontweight='bold',
+                    color='white' if i == 0 or stats_df.iloc[i]['threshold'] == 0.90 else 'black',
+                    bbox=dict(boxstyle='round,pad=0.3',
+                              facecolor=colors[i],
+                              edgecolor='black',
+                              linewidth=1.5,
+                              alpha=0.9))
+
+    # =========================================================================
+    # PERFORMANCE TABLE
+    # =========================================================================
+
+    # Prepare table data
+    table_data = []
+    table_data.append(['Threshold', 'Avg vs BUFR', 'Std Dev', 'Min', 'Max', 'Months Beat BUFR'])
+
+    for _, row in stats_df.iterrows():
+        table_data.append([
+            f"{int(row['threshold'] * 100)}%",
+            f"{row['avg_excess'] * 100:+.2f}%",
+            f"{row['std_excess'] * 100:.2f}%",
+            f"{row['min_excess'] * 100:+.2f}%",
+            f"{row['max_excess'] * 100:+.2f}%",
+            f"{int(row['num_beating'])}/{int(row['total_months'])}"
+        ])
+
+    # Create table
+    table = ax_table.table(cellText=table_data,
+                           cellLoc='center',
+                           loc='center',
+                           bbox=[0, 0, 1, 1])
+
+    # Style table
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 2.5)
+
+    # Header row styling
+    for i in range(len(table_data[0])):
+        cell = table[(0, i)]
+        cell.set_facecolor('#366092')
+        cell.set_text_props(weight='bold', color='white', fontsize=11)
+        cell.set_edgecolor('black')
+        cell.set_linewidth(2)
+
+    # Data row styling
+    for i in range(1, len(table_data)):
+        # Color code by ranking
+        row_color = colors[i - 1]
+        row_alpha = 0.15
+
+        for j in range(len(table_data[i])):
+            cell = table[(i, j)]
+            cell.set_facecolor(row_color)
+            cell.set_alpha(row_alpha)
+            cell.set_edgecolor('black')
+            cell.set_linewidth(1)
+
+            # Bold the avg vs BUFR column (index 1)
+            if j == 1:
+                cell.set_text_props(weight='bold', fontsize=10)
+
+    plt.tight_layout()
+
+    filename = 'threshold_performance_analysis.png'
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"    ✓ Saved: {filename}")
+
+    # Also export table as CSV for reference
+    stats_df_export = stats_df.copy()
+    stats_df_export['threshold'] = (stats_df_export['threshold'] * 100).astype(int).astype(str) + '%'
+    stats_df_export['avg_excess'] = (stats_df_export['avg_excess'] * 100).round(2)
+    stats_df_export['std_excess'] = (stats_df_export['std_excess'] * 100).round(2)
+    stats_df_export['min_excess'] = (stats_df_export['min_excess'] * 100).round(2)
+    stats_df_export['max_excess'] = (stats_df_export['max_excess'] * 100).round(2)
+
+    csv_path = os.path.join(output_dir, 'threshold_performance_table.csv')
+    stats_df_export.to_csv(csv_path, index=False)
+    print(f"    ✓ Saved: threshold_performance_table.csv")
+
+    return filepath
+
+
+def plot_best_strategies_comparison(
+        results_list: List[Dict],
+        summary_df: pd.DataFrame,
+        output_dir: str,
+        max_strategies: int = None
+) -> str:
+    """
+    Clean comparison of top-performing strategies.
+
+    Dynamically adapts to show all unique strategies (or top N if many strategies).
+    Shows actual trigger/selection logic in legend instead of rank numbers.
+
+    Parameters:
+        results_list: List of all backtest results
+        summary_df: Summary DataFrame
+        output_dir: Directory to save plot
+        max_strategies: Optional limit on number of strategies to show (default: show all)
+
+    Returns:
+        Filepath to saved plot
+    """
+    print("\n  Generating: Best Strategies Comparison...")
+
+    summary_df = _ensure_intent_column(summary_df)
+
+    # Determine how many unique strategies we have
+    num_unique_strategies = len(summary_df.groupby(['trigger_type', 'selection_algo', 'launch_month']).size())
+
+    # If not specified, show all strategies (or top 10 if more than 10)
+    if max_strategies is None:
+        max_strategies = min(num_unique_strategies, 10)
+
+    print(f"    Total unique strategies: {num_unique_strategies}")
+    print(f"    Showing top {max_strategies} by Sharpe ratio")
+
+    # Dynamic figure sizing based on number of strategies
+    fig_height = max(8, 6 + max_strategies * 0.3)  # Add height for more strategies
+    fig, ax = plt.subplots(figsize=(16, fig_height))
+
+    # Get top N strategies by Sharpe ratio
+    top_n = summary_df.nlargest(max_strategies, 'strategy_sharpe')
+
+    # Build strategy info
+    strategy_ids = {}
+    strategy_rows = {}
+    labels = {}
+
+    # Color palette that scales with N
+    if max_strategies <= 4:
+        color_palette = ['#2E7D32', '#D32F2F', '#1565C0', '#F57C00']  # Green, Red, Blue, Orange
+    elif max_strategies <= 7:
+        color_palette = ['#2E7D32', '#D32F2F', '#1565C0', '#F57C00', '#7B1FA2', '#00897B', '#C62828']
+    else:
+        # Use matplotlib colormap for many strategies
+        import matplotlib.cm as cm
+        cmap = cm.get_cmap('tab10')
+        color_palette = [cmap(i) for i in range(max_strategies)]
+
+    colors = {}
+
+    for i, (idx, row) in enumerate(top_n.iterrows(), 1):
+        key = f'top_{i}'
+        strategy_ids[key] = _create_strategy_id(row)
+        strategy_rows[key] = row
+        colors[key] = color_palette[i - 1] if i <= len(color_palette) else '#666666'
+
+        # Create concise label showing trigger + selection
+        labels[key] = _format_strategy_label_short(row)
+
+    # Plot strategies
+    plotted_strategies = []
+    for key, strat_id in strategy_ids.items():
+        for result in results_list:
+            result_id = _create_strategy_id(result)
+
+            if result_id == strat_id:
+                daily_nav = result['daily_performance']
+
+                color = colors.get(key, '#666666')
+
+                ax.plot(daily_nav['Date'], daily_nav['Strategy_NAV'],
+                        color=color, linewidth=2.5, alpha=0.9,
+                        label=labels[key], zorder=10)
+
+                plotted_strategies.append((key, strategy_rows[key], color))
+                break
+
+    # Plot benchmarks
+    if results_list:
+        benchmark_nav = _get_earliest_benchmark_data(results_list)
+
+        ax.plot(benchmark_nav['Date'], benchmark_nav['SPY_NAV'],
+                color=BENCHMARK_COLORS['SPY'], linewidth=2.0, linestyle='--',
+                alpha=0.7, label='SPY', zorder=5)
+
+        ax.plot(benchmark_nav['Date'], benchmark_nav['BUFR_NAV'],
+                color=BENCHMARK_COLORS['BUFR'], linewidth=2.0, linestyle=':',
+                alpha=0.7, label='BUFR', zorder=5)
+
+    # Add text box with detailed strategy information
+    textstr_lines = ['STRATEGY DETAILS\n' + '─' * 50]
+
+    for i, (key, row, color) in enumerate(plotted_strategies):
+        if i > 0:
+            textstr_lines.append('')  # Blank line between strategies
+
+        # Color indicator
+        color_names = {
+            '#2E7D32': '■ Green',
+            '#D32F2F': '■ Red',
+            '#1565C0': '■ Blue',
+            '#F57C00': '■ Orange',
+            '#7B1FA2': '■ Purple',
+            '#00897B': '■ Teal',
+            '#C62828': '■ Dark Red',
+        }
+        color_label = color_names.get(color, '■')
+
+        textstr_lines.append(f'{color_label} Rank #{i + 1}:')
+        textstr_lines.append(_format_strategy_details(row, include_metrics=True))
+
+    textstr = '\n'.join(textstr_lines)
+
+    # Position text box
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.85,
+                 edgecolor='black', linewidth=1.5)
+    ax.text(0.98, 0.02, textstr, transform=ax.transAxes, fontsize=9,
+            verticalalignment='bottom', horizontalalignment='right',
+            bbox=props, family='monospace')
+
+    # Formatting
+    title = f'Top {max_strategies} Performing Strategies' if max_strategies < num_unique_strategies else 'Top Performing Strategies'
+    ax.set_title(title, fontsize=16, fontweight='bold')
+    ax.set_xlabel('Date', fontsize=12)
+    ax.set_ylabel('NAV (Normalized to 100)', fontsize=12)
+    ax.grid(True, alpha=0.3)
+
+    # Legend positioning - adjust based on number of items
+    num_legend_items = len(plotted_strategies) + 2  # +2 for benchmarks
+    if num_legend_items <= 6:
+        legend_ncol = 1
+        legend_loc = 'upper left'
+    else:
+        legend_ncol = 2
+        legend_loc = 'upper left'
+
+    ax.legend(loc=legend_loc, fontsize=10, framealpha=0.9, ncol=legend_ncol)
+
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+    ax.xaxis.set_major_locator(mdates.YearLocator())
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    plt.tight_layout()
+
+    filename = 'best_strategies_comparison.png'
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"    ✓ Saved: {filename}")
+    return filepath
+
+
+def _format_strategy_label_short(row) -> str:
+    """
+    Create concise label for legend showing trigger + selection.
+
+    Examples:
+    - "RemCap 75% → Highest Cap"
+    - "CapUtil 75% → Lowest Util"
+    - "Monthly → Most Recent"
+
+    Parameters:
+        row: Strategy row (Series or dict)
+
+    Returns:
+        Formatted label string
+    """
+    import ast
+
+    # Extract trigger params
+    if isinstance(row.get('trigger_params'), str):
+        try:
+            params = ast.literal_eval(row['trigger_params'])
+        except:
+            params = {}
+    else:
+        params = row.get('trigger_params', {})
+
+    trigger_type = row['trigger_type']
+    selection = row['selection_algo']
+
+    # Shorten trigger name
+    if 'remaining_cap' in trigger_type:
+        if 'threshold' in params:
+            threshold_pct = int(params['threshold'] * 100)
+            trigger_str = f"RemCap {threshold_pct}%"
+        else:
+            trigger_str = "RemCap"
+
+    elif 'cap_utilization' in trigger_type:
+        if 'threshold' in params:
+            threshold_pct = int(params['threshold'] * 100)
+            trigger_str = f"CapUtil {threshold_pct}%"
+        else:
+            trigger_str = "CapUtil"
+
+    elif 'downside' in trigger_type:
+        if 'threshold' in params:
+            threshold_pct = int(params['threshold'] * 100)
+            trigger_str = f"Downside {threshold_pct}%"
+        else:
+            trigger_str = "Downside"
+
+    elif 'ref_asset' in trigger_type:
+        if 'threshold' in params:
+            threshold_pct = int(params['threshold'] * 100)
+            trigger_str = f"RefAsset {threshold_pct:+d}%"
+        else:
+            trigger_str = "RefAsset"
+
+    elif 'rebalance_time_period' in trigger_type:
+        if 'frequency' in params:
+            freq = params['frequency']
+            freq_map = {
+                'monthly': 'Monthly',
+                'quarterly': 'Quarterly',
+                'semi_annual': 'Semi-Annual',
+                'annual': 'Annual'
+            }
+            trigger_str = freq_map.get(freq, freq.title())
+        else:
+            trigger_str = "Time-Based"
+    else:
+        # Fallback - just use type
+        trigger_str = trigger_type.replace('_', ' ').title()
+
+    # Shorten selection name
+    selection_map = {
+        'select_most_recent_launch': 'Most Recent',
+        'select_remaining_cap_highest': 'Highest Cap',
+        'select_remaining_cap_lowest': 'Lowest Cap',
+        'select_cap_utilization_lowest': 'Lowest Util',
+        'select_cap_utilization_highest': 'Highest Util',
+        'select_downside_buffer_highest': 'Highest Downside',
+        'select_downside_buffer_lowest': 'Lowest Downside',
+        'select_cost_analysis': 'Cost Opt',
+        'select_highest_outcome_and_cap': 'High Outcome+Cap'
+    }
+
+    selection_str = selection_map.get(selection, selection.replace('select_', '').replace('_', ' ').title())
+
+    # Combine with arrow
+    return f"{trigger_str} → {selection_str}"
