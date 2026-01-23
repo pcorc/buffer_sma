@@ -17,6 +17,7 @@ import matplotlib.dates as mdates
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import os
+import ast
 
 # =============================================================================
 # COLOR SCHEMES
@@ -76,12 +77,18 @@ def _get_earliest_benchmark_data(results_list: List[Dict]) -> pd.DataFrame:
     return earliest_result['daily_performance']
 
 
-def _create_strategy_id(row) -> str:
-    """Create unique strategy identifier from row or dict."""
-    if isinstance(row, dict):
-        return f"{row['launch_month']}_{row['trigger_type']}_{row['selection_algo']}"
-    return f"{row['launch_month']}_{row['trigger_type']}_{row['selection_algo']}"
+def create_strategy_id(row):
+    """Create unique ID including threshold parameter."""
 
+    # Extract threshold from trigger_params
+    try:
+        params = ast.literal_eval(row['trigger_params']) if isinstance(row['trigger_params'], str) else row['trigger_params']
+        threshold = params.get('threshold', 'none')
+    except:
+        threshold = 'none'
+
+    # Include threshold in ID
+    return f"{row['launch_month']}_{row['trigger_type']}_{row['selection_algo']}_{threshold}"
 
 def _classify_strategy_intent(selection_algo: str) -> str:
     """
@@ -410,6 +417,229 @@ def plot_threshold_comparison(
     return filepath
 
 
+def plot_threshold_performance_with_table(
+        summary_df: pd.DataFrame,
+        output_dir: str
+) -> Optional[str]:
+    """
+    Comprehensive threshold analysis with integrated performance table.
+
+    Shows:
+    1. Bar chart of average excess vs BUFR by threshold
+    2. Integrated table with detailed statistics
+    3. Visual ranking highlighting 90% underperformance
+
+    Only relevant for batches testing cap_utilization_threshold.
+
+    Parameters:
+        summary_df: Summary DataFrame with all results
+        output_dir: Directory to save plot
+
+    Returns:
+        Filepath if successful, None otherwise
+    """
+    import ast
+
+    print("\n  Generating: Threshold Performance Analysis with Table...")
+
+    # Extract threshold values
+    def extract_threshold(params_str):
+        try:
+            params_dict = ast.literal_eval(params_str)
+            return params_dict.get('threshold', None)
+        except:
+            return None
+
+    summary_df_copy = summary_df.copy()
+    summary_df_copy['threshold_value'] = summary_df_copy['trigger_params'].apply(extract_threshold)
+
+    # Filter to threshold strategies with correct selection algo
+    threshold_data = summary_df_copy[
+        (summary_df_copy['trigger_type'] == 'cap_utilization_threshold') &
+        (summary_df_copy['selection_algo'] == 'select_most_recent_launch') &
+        (summary_df_copy['threshold_value'].notna())
+        ].copy()
+
+    if threshold_data.empty:
+        print("    ⚠ No threshold data - skipping")
+        return None
+
+    # Calculate statistics by threshold
+    stats_by_threshold = []
+
+    for threshold in sorted(threshold_data['threshold_value'].unique()):
+        thresh_data = threshold_data[threshold_data['threshold_value'] == threshold]
+
+        avg_excess = thresh_data['vs_bufr_excess'].mean()
+        std_excess = thresh_data['vs_bufr_excess'].std()
+        min_excess = thresh_data['vs_bufr_excess'].min()
+        max_excess = thresh_data['vs_bufr_excess'].max()
+        num_beating = (thresh_data['vs_bufr_excess'] > 0).sum()
+        total_months = len(thresh_data)
+
+        stats_by_threshold.append({
+            'threshold': threshold,
+            'avg_excess': avg_excess,
+            'std_excess': std_excess,
+            'min_excess': min_excess,
+            'max_excess': max_excess,
+            'num_beating': num_beating,
+            'total_months': total_months,
+            'pct_beating': (num_beating / total_months * 100) if total_months > 0 else 0
+        })
+
+    stats_df = pd.DataFrame(stats_by_threshold)
+    stats_df = stats_df.sort_values('avg_excess', ascending=False)  # Best to worst
+
+    # Print summary to console
+    print("\n  Threshold Performance Summary:")
+    print("  " + "=" * 70)
+    for _, row in stats_df.iterrows():
+        print(f"  {int(row['threshold'] * 100):3d}% | "
+              f"Avg: {row['avg_excess'] * 100:+6.2f}% | "
+              f"Std: {row['std_excess'] * 100:5.2f}% | "
+              f"Beat BUFR: {row['num_beating']:.0f}/{row['total_months']:.0f} months")
+    print("  " + "=" * 70)
+
+    # Create figure with adjusted layout
+    fig = plt.figure(figsize=(14, 10))
+
+    # Top: Bar chart (70% of figure height)
+    ax_bar = plt.subplot2grid((10, 1), (0, 0), rowspan=6)
+
+    # Bottom: Table (30% of figure height)
+    ax_table = plt.subplot2grid((10, 1), (7, 0), rowspan=3)
+    ax_table.axis('off')
+
+    # =========================================================================
+    # BAR CHART
+    # =========================================================================
+
+    thresholds_pct = [int(t * 100) for t in stats_df['threshold']]
+    avg_excess_pct = stats_df['avg_excess'].values * 100
+
+    # Color coding: highlight 90% as red, best as green
+    colors = []
+    for i, threshold in enumerate(stats_df['threshold']):
+        if i == 0:  # Best performer
+            colors.append('#2E7D32')  # Dark green
+        elif threshold == 0.90:  # 90% threshold
+            colors.append('#D32F2F')  # Red
+        else:
+            colors.append('#1976D2')  # Blue
+
+    bars = ax_bar.bar(range(len(thresholds_pct)), avg_excess_pct,
+                      color=colors, alpha=0.85, edgecolor='black', linewidth=2)
+
+    # Add value labels on bars
+    for bar, val in zip(bars, avg_excess_pct):
+        height = bar.get_height()
+        y_pos = height + 0.15 if height > 0 else height - 0.15
+        va = 'bottom' if height > 0 else 'top'
+
+        ax_bar.text(bar.get_x() + bar.get_width() / 2, y_pos,
+                    f'{val:+.2f}%',
+                    ha='center', va=va, fontsize=12, fontweight='bold')
+
+    # Formatting
+    ax_bar.set_xticks(range(len(thresholds_pct)))
+    ax_bar.set_xticklabels([f'{t}%' for t in thresholds_pct], fontsize=12, fontweight='bold')
+    ax_bar.set_ylabel('Average Excess Return vs BUFR (%)', fontsize=13, fontweight='bold')
+    ax_bar.set_title('Cap Utilization Threshold Performance Analysis (Averaged Across 12 Months)',
+                     fontsize=15, fontweight='bold', pad=20)
+    ax_bar.axhline(y=0, color='black', linestyle='--', linewidth=1.5, alpha=0.5)
+    ax_bar.grid(True, alpha=0.3, axis='y', linestyle=':')
+
+    # Add ranking labels
+    for i, (bar, rank) in enumerate(zip(bars, range(1, len(bars) + 1))):
+        ax_bar.text(bar.get_x() + bar.get_width() / 2, ax_bar.get_ylim()[1] * 0.95,
+                    f'Rank #{rank}',
+                    ha='center', va='top', fontsize=10, fontweight='bold',
+                    color='white' if i == 0 or stats_df.iloc[i]['threshold'] == 0.90 else 'black',
+                    bbox=dict(boxstyle='round,pad=0.3',
+                              facecolor=colors[i],
+                              edgecolor='black',
+                              linewidth=1.5,
+                              alpha=0.9))
+
+    # =========================================================================
+    # PERFORMANCE TABLE
+    # =========================================================================
+
+    # Prepare table data
+    table_data = []
+    table_data.append(['Threshold', 'Avg vs BUFR', 'Std Dev', 'Min', 'Max', 'Months Beat BUFR'])
+
+    for _, row in stats_df.iterrows():
+        table_data.append([
+            f"{int(row['threshold'] * 100)}%",
+            f"{row['avg_excess'] * 100:+.2f}%",
+            f"{row['std_excess'] * 100:.2f}%",
+            f"{row['min_excess'] * 100:+.2f}%",
+            f"{row['max_excess'] * 100:+.2f}%",
+            f"{int(row['num_beating'])}/{int(row['total_months'])}"
+        ])
+
+    # Create table
+    table = ax_table.table(cellText=table_data,
+                           cellLoc='center',
+                           loc='center',
+                           bbox=[0, 0, 1, 1])
+
+    # Style table
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 2.5)
+
+    # Header row styling
+    for i in range(len(table_data[0])):
+        cell = table[(0, i)]
+        cell.set_facecolor('#366092')
+        cell.set_text_props(weight='bold', color='white', fontsize=11)
+        cell.set_edgecolor('black')
+        cell.set_linewidth(2)
+
+    # Data row styling
+    for i in range(1, len(table_data)):
+        # Color code by ranking
+        row_color = colors[i - 1]
+        row_alpha = 0.15
+
+        for j in range(len(table_data[i])):
+            cell = table[(i, j)]
+            cell.set_facecolor(row_color)
+            cell.set_alpha(row_alpha)
+            cell.set_edgecolor('black')
+            cell.set_linewidth(1)
+
+            # Bold the avg vs BUFR column (index 1)
+            if j == 1:
+                cell.set_text_props(weight='bold', fontsize=10)
+
+    plt.tight_layout()
+
+    filename = 'threshold_performance_analysis.png'
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"    ✓ Saved: {filename}")
+
+    # Also export table as CSV for reference
+    stats_df_export = stats_df.copy()
+    stats_df_export['threshold'] = (stats_df_export['threshold'] * 100).astype(int).astype(str) + '%'
+    stats_df_export['avg_excess'] = (stats_df_export['avg_excess'] * 100).round(2)
+    stats_df_export['std_excess'] = (stats_df_export['std_excess'] * 100).round(2)
+    stats_df_export['min_excess'] = (stats_df_export['min_excess'] * 100).round(2)
+    stats_df_export['max_excess'] = (stats_df_export['max_excess'] * 100).round(2)
+
+    csv_path = os.path.join(output_dir, 'threshold_performance_table.csv')
+    stats_df_export.to_csv(csv_path, index=False)
+    print(f"    ✓ Saved: threshold_performance_table.csv")
+
+    return filepath
+
+
 # =============================================================================
 # PLOT 4: REGIME PERFORMANCE WITH BUFR
 # =============================================================================
@@ -474,7 +704,7 @@ def plot_regime_performance_with_bufr(
     print(f"    Using columns: '{strat_return_col}', '{bufr_return_col}'")
 
     # Collect performance data
-    regimes = ['bull', 'neutral', 'bear']
+    regimes = ['bull', 'bear']
     bullish_returns = []
     defensive_returns = []
     bufr_returns = []
@@ -560,7 +790,7 @@ def plot_regime_performance_with_bufr(
     ax.set_title(f'Strategy Performance Across Market Regimes ({horizon} Forward vs BUFR)',
                  fontsize=15, fontweight='bold', pad=20)
     ax.set_xticks(x)
-    ax.set_xticklabels(['Bull', 'Neutral', 'Bear'], fontsize=12)
+    ax.set_xticklabels(['Bull', 'Bear'], fontsize=12)
     ax.legend(loc='upper right', fontsize=11, framealpha=0.95)
     ax.axhline(y=0, color='black', linestyle='--', linewidth=1.2, alpha=0.4)
     ax.grid(True, alpha=0.3, axis='y', linestyle=':')
@@ -574,6 +804,227 @@ def plot_regime_performance_with_bufr(
 
     print(f"    ✓ Saved: {filename}")
     return filepath
+
+
+
+def plot_threshold_regime_performance(
+        future_regime_df: pd.DataFrame,
+        summary_df: pd.DataFrame,
+        output_dir: str,
+        horizon: str = '3M',
+        trigger_type: str = 'cap_utilization_threshold',
+        selection_algo: str = 'select_most_recent_launch'
+) -> Optional[str]:
+    """
+    Show regime performance broken out by threshold level.
+
+    Generic function that works with any threshold-based strategy.
+    Shows how each threshold performs in bull vs bear markets.
+
+    Parameters:
+        future_regime_df: Forward regime analysis DataFrame
+        summary_df: Summary DataFrame with all simulation results
+        output_dir: Directory to save plots
+        horizon: '3M' or '6M' forward window
+        trigger_type: Type of threshold trigger to analyze
+                     (e.g., 'cap_utilization_threshold', 'remaining_cap_threshold')
+        selection_algo: Selection algorithm to filter for
+                       (e.g., 'select_most_recent_launch', 'select_remaining_cap_highest')
+
+    Returns:
+        Filepath if successful, None otherwise
+    """
+    import ast
+
+    print(f"\n  Generating: Threshold Regime Performance ({horizon})...")
+
+    if future_regime_df.empty or summary_df.empty:
+        print("    ⚠ No regime data - skipping")
+        return None
+
+    # Select columns based on horizon
+    if horizon == '3M':
+        regime_col = 'future_regime_3m'
+        strat_return_col = 'forward_3m_return'
+        bufr_return_col = 'bufr_forward_3m_return'
+    else:  # 6M
+        regime_col = 'future_regime_6m'
+        strat_return_col = 'forward_6m_return'
+        bufr_return_col = 'bufr_forward_6m_return'
+
+    # Verify columns exist
+    if regime_col not in future_regime_df.columns:
+        print(f"    ⚠ Column '{regime_col}' not found - skipping")
+        return None
+
+    print(f"    Using columns: '{strat_return_col}', '{bufr_return_col}'")
+    print(f"    Filtering: {trigger_type} + {selection_algo}")
+
+    # Filter to specified threshold strategies
+    threshold_strategies = summary_df[
+        (summary_df['trigger_type'] == trigger_type) &
+        (summary_df['selection_algo'] == selection_algo)
+        ].copy()
+
+    if threshold_strategies.empty:
+        print(f"    ⚠ No strategies found with {trigger_type} + {selection_algo} - skipping")
+        return None
+
+    # Extract threshold values
+    def extract_threshold(params_str):
+        try:
+            params = ast.literal_eval(params_str)
+            return params.get('threshold', None)
+        except:
+            return None
+
+    threshold_strategies['threshold_value'] = threshold_strategies['trigger_params'].apply(extract_threshold)
+    threshold_strategies = threshold_strategies.dropna(subset=['threshold_value'])
+
+    # Get unique thresholds and sort
+    unique_thresholds = sorted(threshold_strategies['threshold_value'].unique())
+
+    print(f"    Found {len(unique_thresholds)} thresholds: {[f'{int(t * 100)}%' for t in unique_thresholds]}")
+
+    # Collect performance data for each threshold in each regime
+    regimes = ['bull', 'bear']
+    threshold_performance = {regime: {} for regime in regimes}
+    bufr_performance = {}
+
+    for regime in regimes:
+        regime_data = future_regime_df[future_regime_df[regime_col] == regime]
+
+        if regime_data.empty:
+            print(f"    ⚠ No data for {regime} regime - skipping")
+            continue
+
+        # Get BUFR performance in this regime
+        bufr_return = regime_data[bufr_return_col].mean()
+        bufr_performance[regime] = bufr_return
+
+        # Get performance for each threshold
+        for threshold in unique_thresholds:
+            # Find strategies with this threshold
+            threshold_strats = threshold_strategies[
+                threshold_strategies['threshold_value'] == threshold
+                ]
+
+            # Collect returns for all strategies with this threshold in this regime
+            threshold_returns = []
+
+            for _, strat_row in threshold_strats.iterrows():
+                strat_data = regime_data[
+                    (regime_data['launch_month'] == strat_row['launch_month']) &
+                    (regime_data['trigger_type'] == strat_row['trigger_type']) &
+                    (regime_data['selection_algo'] == strat_row['selection_algo'])
+                    ]
+
+                if not strat_data.empty:
+                    threshold_returns.append(strat_data[strat_return_col].mean())
+
+            # Average across all strategies with this threshold
+            if threshold_returns:
+                avg_return = np.mean(threshold_returns)
+                threshold_performance[regime][threshold] = avg_return
+            else:
+                threshold_performance[regime][threshold] = 0
+
+    # Create visualization
+    fig, ax = plt.subplots(figsize=(14, 8))
+
+    # Number of groups (thresholds + BUFR)
+    n_thresholds = len(unique_thresholds)
+    n_bars = n_thresholds + 1  # +1 for BUFR
+
+    # X positions for each regime
+    x = np.arange(len(regimes))
+    width = 0.8 / n_bars  # Divide space among all bars
+
+    # Color palette for thresholds (gradient from green to red)
+    threshold_colors = plt.cm.RdYlGn_r(np.linspace(0.3, 0.9, n_thresholds))
+
+    # Plot bars for each threshold
+    for i, threshold in enumerate(unique_thresholds):
+        threshold_pct = int(threshold * 100)
+
+        returns_by_regime = [
+            threshold_performance[regime].get(threshold, 0) * 100
+            for regime in regimes
+        ]
+
+        offset = width * (i - n_bars / 2 + 0.5)
+
+        bars = ax.bar(x + offset, returns_by_regime, width,
+                      label=f'{threshold_pct}% Threshold',
+                      color=threshold_colors[i], alpha=0.85,
+                      edgecolor='black', linewidth=1.2)
+
+        # Add value labels
+        for bar, val in zip(bars, returns_by_regime):
+            height = bar.get_height()
+            if abs(height) < 0.3:  # Skip very small values
+                continue
+
+            y_pos = height + 0.3 if height >= 0 else height - 0.3
+            va = 'bottom' if height >= 0 else 'top'
+
+            ax.text(bar.get_x() + bar.get_width() / 2, y_pos,
+                    f'{val:.1f}%',
+                    ha='center', va=va, fontsize=9, fontweight='bold')
+
+    # Plot BUFR benchmark
+    bufr_returns = [bufr_performance.get(regime, 0) * 100 for regime in regimes]
+    offset = width * (n_thresholds - n_bars / 2 + 0.5)
+
+    bufr_bars = ax.bar(x + offset, bufr_returns, width,
+                       label='BUFR Benchmark',
+                       color='#ff7f0e', alpha=0.7,
+                       edgecolor='black', linewidth=1.2)
+
+    # Add BUFR value labels
+    for bar, val in zip(bufr_bars, bufr_returns):
+        height = bar.get_height()
+        if abs(height) < 0.3:
+            continue
+
+        y_pos = height + 0.3 if height >= 0 else height - 0.3
+        va = 'bottom' if height >= 0 else 'top'
+
+        ax.text(bar.get_x() + bar.get_width() / 2, y_pos,
+                f'{val:.1f}%',
+                ha='center', va=va, fontsize=9, fontweight='bold')
+
+    # Create dynamic title based on trigger type
+    trigger_display = trigger_type.replace('_threshold', '').replace('_', ' ').title()
+
+    # Formatting
+    ax.set_xlabel(f'Market Regime ({horizon} Forward)', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Strategy Return (%)', fontsize=13, fontweight='bold')
+    ax.set_title(f'{trigger_display} Threshold Performance Across Market Regimes ({horizon} Forward)',
+                 fontsize=15, fontweight='bold', pad=20)
+    ax.set_xticks(x)
+    ax.set_xticklabels(['Bull', 'Bear'], fontsize=12)
+    ax.legend(loc='upper right', fontsize=10, framealpha=0.95, ncol=2)
+    ax.axhline(y=0, color='black', linestyle='--', linewidth=1.2, alpha=0.4)
+    ax.grid(True, alpha=0.3, axis='y', linestyle=':')
+
+    plt.tight_layout()
+
+    # Generic filename
+    filename = f'threshold_regime_performance_{horizon.lower()}.png'
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    for threshold in unique_thresholds:
+        bull_ret = threshold_performance['bull'].get(threshold, 0) * 100
+        bear_ret = threshold_performance['bear'].get(threshold, 0) * 100
+        spread = bull_ret - bear_ret
+
+        print(f"    {int(threshold * 100):>3}%        {bull_ret:>+6.2f}%         {bear_ret:>+6.2f}%         {spread:>+6.2f}%")
+
+    return filepath
+
 
 # =============================================================================
 # PLOT 5: PERFORMANCE METRICS BARS (INTENT-BASED)
@@ -687,6 +1138,175 @@ def plot_performance_metrics_comparison(
 # MASTER FUNCTION: INTELLIGENT BATCH VISUALIZATION
 # =============================================================================
 
+
+def plot_batch8_normalized_nav(
+        results_list: List[Dict],
+        summary_df: pd.DataFrame,
+        output_dir: str,
+        top_n: int = 5
+) -> Optional[str]:
+    """
+    Create normalized NAV plot for Batch 8 threshold analysis.
+
+    All strategies start at NAV=100 on Day 0, plotted on relative time axis.
+    Shows top 5 performers with detailed strategy information.
+
+    Parameters:
+        results_list: List of backtest result dicts
+        summary_df: Summary DataFrame with performance metrics
+        output_dir: Directory to save plot
+        top_n: Number of top strategies to plot (default 5)
+
+    Returns:
+        Filepath if successful, None otherwise
+    """
+    import ast
+
+    print(f"\n  Generating: Batch 8 Normalized NAV Plot (Top {top_n})...")
+
+    if summary_df.empty or not results_list:
+        print("    ⚠ No data available - skipping")
+        return None
+
+    # Get top N strategies by Sharpe ratio
+    top_strategies = summary_df.nlargest(top_n, 'strategy_sharpe')
+
+    # Create strategy IDs for matching
+    def create_strategy_id(row):
+        return f"{row['launch_month']}_{row['trigger_type']}_{row['selection_algo']}"
+
+    top_strategy_ids = [create_strategy_id(row) for _, row in top_strategies.iterrows()]
+
+    # Color palette for top 5 strategies
+    colors = ['#2E7D32', '#1565C0', '#F57C00', '#7B1FA2', '#C62828']
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(16, 9))
+
+    # Track plotted strategies for legend and details
+    plotted_strategies = []
+
+    # Plot each top strategy
+    for i, (idx, row) in enumerate(top_strategies.iterrows()):
+        strategy_id = create_strategy_id(row)
+
+        # Find matching result
+        for result in results_list:
+            result_id = create_strategy_id(result)
+
+            if result_id == strategy_id:
+                # Get daily performance data
+                daily_nav = result['daily_performance'].copy()
+
+                # Normalize to start at 100
+                first_nav = daily_nav['Strategy_NAV'].iloc[0]
+                daily_nav['Normalized_NAV'] = (daily_nav['Strategy_NAV'] / first_nav) * 100
+
+                # Create relative time axis (days since inception)
+                daily_nav['Days_Since_Inception'] = range(len(daily_nav))
+
+                # Extract threshold for label
+                try:
+                    params = ast.literal_eval(row['trigger_params'])
+                    threshold = int(params.get('threshold', 0) * 100)
+                except:
+                    threshold = 0
+
+                # Create label
+                label = f"#{i + 1}: {threshold}% Threshold ({row['launch_month']})"
+
+                # Plot normalized NAV
+                ax.plot(daily_nav['Days_Since_Inception'],
+                        daily_nav['Normalized_NAV'],
+                        color=colors[i], linewidth=2.5, alpha=0.9,
+                        label=label, zorder=10 - i)
+
+                # Store for details box
+                plotted_strategies.append({
+                    'rank': i + 1,
+                    'row': row,
+                    'color': colors[i],
+                    'threshold': threshold,
+                    'daily_nav': daily_nav
+                })
+
+                print(f"    Plotted Rank #{i + 1}: {threshold}% ({row['launch_month']}) - Sharpe: {row['strategy_sharpe']:.2f}")
+
+                break
+
+    # Plot benchmarks (normalized to same start point as strategies)
+    if plotted_strategies:
+        first_strategy_id = create_strategy_id(plotted_strategies[0]['row'])
+
+        for result in results_list:
+            if create_strategy_id(result) == first_strategy_id:
+                benchmark_daily = result['daily_performance'].copy()
+
+                # Normalize benchmarks to start at 100
+                first_spy = benchmark_daily['SPY_NAV'].iloc[0]
+                first_bufr = benchmark_daily['BUFR_NAV'].iloc[0]
+
+                benchmark_daily['Normalized_SPY'] = (benchmark_daily['SPY_NAV'] / first_spy) * 100
+                benchmark_daily['Normalized_BUFR'] = (benchmark_daily['BUFR_NAV'] / first_bufr) * 100
+                benchmark_daily['Days_Since_Inception'] = range(len(benchmark_daily))
+
+                # Plot benchmarks
+                ax.plot(benchmark_daily['Days_Since_Inception'],
+                        benchmark_daily['Normalized_SPY'],
+                        color='#757575', linewidth=2, linestyle='--',
+                        alpha=0.7, label='SPY', zorder=5)
+
+                ax.plot(benchmark_daily['Days_Since_Inception'],
+                        benchmark_daily['Normalized_BUFR'],
+                        color='#9E9E9E', linewidth=2, linestyle=':',
+                        alpha=0.7, label='BUFR', zorder=5)
+
+                break
+
+    # Formatting
+    ax.set_xlabel('Days Since Inception', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Normalized NAV (Starting at 100)', fontsize=13, fontweight='bold')
+    ax.set_title('Top 5 Cap Utilization Threshold Strategies - Normalized Performance',
+                 fontsize=16, fontweight='bold', pad=20)
+    ax.legend(loc='upper left', fontsize=11, framealpha=0.95)
+    ax.grid(True, alpha=0.3, linestyle=':')
+    ax.axhline(y=100, color='black', linestyle='-', linewidth=1, alpha=0.3)
+
+    # Add strategy details box
+    if plotted_strategies:
+        textstr_lines = ['STRATEGY DETAILS\n' + '─' * 50]
+
+        for strat_info in plotted_strategies:
+            row = strat_info['row']
+            rank = strat_info['rank']
+            threshold = strat_info['threshold']
+
+            textstr_lines.append('')  # Blank line
+            textstr_lines.append(f'■ Rank #{rank}: {threshold}% Threshold')
+            textstr_lines.append(f'  Launch: {row["launch_month"]}')
+            textstr_lines.append(f'  Return: {row["strategy_return"] * 100:+.1f}% | Sharpe: {row["strategy_sharpe"]:.2f}')
+            textstr_lines.append(f'  vs BUFR: {row["vs_bufr_excess"] * 100:+.1f}% | Trades: {int(row["num_trades"])}')
+
+        textstr = '\n'.join(textstr_lines)
+
+        # Position in bottom-right
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.9,
+                     edgecolor='black', linewidth=1.5)
+        ax.text(0.98, 0.02, textstr, transform=ax.transAxes, fontsize=9,
+                verticalalignment='bottom', horizontalalignment='right',
+                bbox=props, family='monospace')
+
+    plt.tight_layout()
+
+    filename = 'batch8_normalized_nav_top5.png'
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"    ✓ Saved: {filename}")
+    return filepath
+
+
 def generate_batch_visualizations(
         results_list: List[Dict],
         summary_df: pd.DataFrame,
@@ -735,15 +1355,45 @@ def generate_batch_visualizations(
     if filepath:
         generated_plots['best_comparison'] = filepath
 
-    # =========================================================================
-    # SPECIALIZED PLOTS (Conditional)
-    # =========================================================================
+        # =========================================================================
+        # SPECIALIZED PLOTS (Conditional)
+        # =========================================================================
 
-    # Threshold comparison (Batch 0 or any batch with threshold testing)
-    if batch_number == 0 or _has_threshold_strategies(summary_df):
-        filepath = plot_threshold_comparison(summary_df, output_dir)
-        if filepath:
-            generated_plots['threshold_comparison'] = filepath
+        # Threshold comparison (Batch 0 or any batch with threshold testing)
+        if batch_number == 8:
+            # Threshold performance bar chart + table
+            filepath = plot_threshold_performance_with_table(summary_df, output_dir)
+            if filepath:
+                generated_plots['batch8_threshold_performance'] = filepath
+
+            # Normalized NAV plot (top 5)
+            filepath = plot_batch8_normalized_nav_ALIGNED_DETAILED_LEGEND(results_list, summary_df, output_dir, top_n=5)
+            if filepath:
+                generated_plots['normalized_nav_aligned'] = filepath
+
+            filepath = plot_threshold_regime_performance(
+                future_regime_df, summary_df, output_dir,
+                horizon='3M',
+                trigger_type='cap_utilization_threshold',
+                selection_algo='select_most_recent_launch'
+            )
+            if filepath:
+                generated_plots['threshold_regime_3m'] = filepath
+
+            filepath = plot_threshold_regime_performance(
+                future_regime_df, summary_df, output_dir,
+                horizon='6M',
+                trigger_type='cap_utilization_threshold',
+                selection_algo='select_most_recent_launch'
+            )
+            if filepath:
+                generated_plots['threshold_regime_6m'] = filepath
+
+        elif batch_number == 0 or _has_threshold_strategies(summary_df):
+            # Use original threshold comparison for other batches
+            filepath = plot_threshold_comparison(summary_df, output_dir)
+            if filepath:
+                generated_plots['threshold_comparison'] = filepath
 
     # Regime performance (if we have regime data and optimal strategies)
     if not future_regime_df.empty and optimal_strategies:
@@ -1347,17 +1997,17 @@ def plot_threshold_performance_with_table(
     ax_bar.axhline(y=0, color='black', linestyle='--', linewidth=1.5, alpha=0.5)
     ax_bar.grid(True, alpha=0.3, axis='y', linestyle=':')
 
-    # Add ranking labels
-    for i, (bar, rank) in enumerate(zip(bars, range(1, len(bars) + 1))):
-        ax_bar.text(bar.get_x() + bar.get_width() / 2, ax_bar.get_ylim()[1] * 0.95,
-                    f'Rank #{rank}',
-                    ha='center', va='top', fontsize=10, fontweight='bold',
-                    color='white' if i == 0 or stats_df.iloc[i]['threshold'] == 0.90 else 'black',
-                    bbox=dict(boxstyle='round,pad=0.3',
-                              facecolor=colors[i],
-                              edgecolor='black',
-                              linewidth=1.5,
-                              alpha=0.9))
+    # # Add ranking labels
+    # for i, (bar, rank) in enumerate(zip(bars, range(1, len(bars) + 1))):
+    #     ax_bar.text(bar.get_x() + bar.get_width() / 2, ax_bar.get_ylim()[1] * 0.95,
+    #                 f'Rank #{rank}',
+    #                 ha='center', va='top', fontsize=10, fontweight='bold',
+    #                 color='white' if i == 0 or stats_df.iloc[i]['threshold'] == 0.90 else 'black',
+    #                 bbox=dict(boxstyle='round,pad=0.3',
+    #                           facecolor=colors[i],
+    #                           edgecolor='black',
+    #                           linewidth=1.5,
+    #                           alpha=0.9))
 
     # =========================================================================
     # PERFORMANCE TABLE
@@ -1499,7 +2149,7 @@ def plot_best_strategies_comparison(
 
     for i, (idx, row) in enumerate(top_n.iterrows(), 1):
         key = f'top_{i}'
-        strategy_ids[key] = _create_strategy_id(row)
+        strategy_ids[key] = create_strategy_id(row)
         strategy_rows[key] = row
         colors[key] = color_palette[i - 1] if i <= len(color_palette) else '#666666'
 
@@ -1510,7 +2160,7 @@ def plot_best_strategies_comparison(
     plotted_strategies = []
     for key, strat_id in strategy_ids.items():
         for result in results_list:
-            result_id = _create_strategy_id(result)
+            result_id = create_strategy_id(result)
 
             if result_id == strat_id:
                 daily_nav = result['daily_performance']
@@ -1691,3 +2341,322 @@ def _format_strategy_label_short(row) -> str:
 
     # Combine with arrow
     return f"{trigger_str} → {selection_str}"
+
+
+def plot_batch8_normalized_nav_ALIGNED_DETAILED_LEGEND(
+        results_list: List[Dict],
+        summary_df: pd.DataFrame,
+        output_dir: str,
+        top_n: int = 5
+) -> Optional[str]:
+    """
+    Create normalized NAV plot with detailed legend showing trigger/selection/threshold.
+
+    Legend format: "#1: Cap Util 75% → Most Recent (SEP)"
+
+    This provides more context than just showing the threshold percentage.
+
+    Parameters:
+        results_list: List of backtest result dicts
+        summary_df: Summary DataFrame with performance metrics
+        output_dir: Directory to save plot
+        top_n: Number of top strategies to plot (default 5)
+
+    Returns:
+        Filepath if successful, None otherwise
+    """
+    print(f"\n  Generating: Batch 8 Normalized NAV Plot - Common Date Range (Top {top_n})...")
+
+    if summary_df.empty or not results_list:
+        print("    ⚠ No data available - skipping")
+        return None
+
+    # Get top N strategies by Sharpe ratio
+    top_strategies = summary_df.nlargest(top_n, 'strategy_sharpe')
+
+    def create_strategy_id(row):
+        """Create unique ID including threshold parameter."""
+        try:
+            params = ast.literal_eval(row['trigger_params']) if isinstance(row['trigger_params'], str) else row['trigger_params']
+            threshold = params.get('threshold', 'none')
+        except:
+            threshold = 'none'
+
+        return f"{row['launch_month']}_{row['trigger_type']}_{row['selection_algo']}_{threshold}"
+
+    # ==========================================================================
+    # HELPER FUNCTIONS FOR LABEL FORMATTING
+    # ==========================================================================
+
+    def format_trigger_name(trigger_type: str) -> str:
+        """Convert trigger_type to short readable name."""
+        trigger_map = {
+            'cap_utilization_threshold': 'Cap Util',
+            'remaining_cap_threshold': 'Rem Cap',
+            'downside_before_buffer_threshold': 'Downside',
+            'ref_asset_return_threshold': 'Ref Return',
+            'rebalance_time_period': 'Time'
+        }
+        return trigger_map.get(trigger_type, trigger_type)
+
+    def format_selection_name(selection_algo: str) -> str:
+        """Convert selection_algo to short readable name."""
+        selection_map = {
+            'select_most_recent_launch': 'Most Recent',
+            'select_remaining_cap_highest': 'Highest Cap',
+            'select_remaining_cap_lowest': 'Lowest Cap',
+            'select_cap_utilization_lowest': 'Lowest Util',
+            'select_cap_utilization_highest': 'Highest Util',
+            'select_downside_buffer_highest': 'Highest Downside',
+            'select_downside_buffer_lowest': 'Lowest Downside',
+            'select_cost_analysis': 'Cost Optimized'
+        }
+        return selection_map.get(selection_algo, selection_algo)
+
+    # ==========================================================================
+    # STEP 1: COLLECT ALL STRATEGY DATA AND FIND COMMON DATE RANGE
+    # ==========================================================================
+
+    strategy_data = []
+    latest_start = None
+    earliest_end = None
+
+    print("\n    Collecting strategy data:")
+
+    for i, (idx, row) in enumerate(top_strategies.iterrows()):
+        strategy_id = create_strategy_id(row)
+
+        # Find matching result
+        for result in results_list:
+            result_id = create_strategy_id(result)
+
+            if result_id == strategy_id:
+                daily_nav = result['daily_performance'].copy()
+
+                start_date = daily_nav['Date'].min()
+                end_date = daily_nav['Date'].max()
+
+                # Track latest start and earliest end
+                if latest_start is None or start_date > latest_start:
+                    latest_start = start_date
+
+                if earliest_end is None or end_date < earliest_end:
+                    earliest_end = end_date
+
+                # Extract threshold
+                try:
+                    params = ast.literal_eval(row['trigger_params']) if isinstance(row['trigger_params'], str) else row['trigger_params']
+                    threshold = params.get('threshold', 0)
+                except:
+                    threshold = 0
+
+                strategy_data.append({
+                    'rank': i + 1,
+                    'row': row,
+                    'daily_nav': daily_nav,
+                    'threshold': threshold,
+                    'threshold_pct': int(threshold * 100),
+                    'trigger_type': row['trigger_type'],
+                    'selection_algo': row['selection_algo'],
+                    'launch_month': row['launch_month'],
+                    'start_date': start_date,
+                    'end_date': end_date
+                })
+
+                print(f"      Rank #{i + 1}: {int(threshold * 100)}% ({row['launch_month']}) - "
+                      f"{start_date.date()} to {end_date.date()}")
+
+                break
+
+    if not strategy_data:
+        print("    ⚠ No matching strategies found - skipping")
+        return None
+
+    # ==========================================================================
+    # STEP 2: VALIDATE COMMON DATE RANGE
+    # ==========================================================================
+
+    if latest_start > earliest_end:
+        print(f"    ⚠ No overlapping period! Latest start: {latest_start.date()}, "
+              f"Earliest end: {earliest_end.date()}")
+        return None
+
+    common_days = (earliest_end - latest_start).days
+
+    print(f"\n    Common date range: {latest_start.date()} to {earliest_end.date()}")
+    print(f"    Common period: {common_days} days")
+
+    # ==========================================================================
+    # STEP 3: FILTER ALL STRATEGIES TO COMMON PERIOD AND NORMALIZE
+    # ==========================================================================
+
+    print("\n    Normalizing to common period:")
+
+    aligned_strategies = []
+
+    for strat_info in strategy_data:
+        daily_nav = strat_info['daily_nav']
+
+        # Filter to common date range
+        common_nav = daily_nav[
+            (daily_nav['Date'] >= latest_start) &
+            (daily_nav['Date'] <= earliest_end)
+            ].copy().reset_index(drop=True)
+
+        if common_nav.empty:
+            print(f"      ⚠ Rank #{strat_info['rank']}: No data in common period - skipping")
+            continue
+
+        # Normalize to 100 at START of common period
+        first_nav = common_nav['Strategy_NAV'].iloc[0]
+        common_nav['Normalized_NAV'] = (common_nav['Strategy_NAV'] / first_nav) * 100
+
+        # Also normalize benchmarks
+        first_spy = common_nav['SPY_NAV'].iloc[0]
+        first_bufr = common_nav['BUFR_NAV'].iloc[0]
+        common_nav['Normalized_SPY'] = (common_nav['SPY_NAV'] / first_spy) * 100
+        common_nav['Normalized_BUFR'] = (common_nav['BUFR_NAV'] / first_bufr) * 100
+
+        # Create relative time axis
+        common_nav['Days_Since_Common_Start'] = range(len(common_nav))
+
+        strat_info['common_nav'] = common_nav
+        aligned_strategies.append(strat_info)
+
+        print(f"      Rank #{strat_info['rank']}: {strat_info['threshold_pct']}% - "
+              f"{len(common_nav)} days aligned")
+
+    if not aligned_strategies:
+        print("    ⚠ No strategies after alignment - skipping")
+        return None
+
+    # ==========================================================================
+    # STEP 4: CREATE VISUALIZATION
+    # ==========================================================================
+
+    fig, ax = plt.subplots(figsize=(16, 9))
+
+    # Color palette for top 5 strategies
+    colors = ['#2E7D32', '#1565C0', '#F57C00', '#7B1FA2', '#C62828']
+
+    # Plot each aligned strategy
+    for i, strat_info in enumerate(aligned_strategies):
+        common_nav = strat_info['common_nav']
+
+        # ✅ NEW: Detailed legend format
+        trigger_short = format_trigger_name(strat_info['trigger_type'])
+        selection_short = format_selection_name(strat_info['selection_algo'])
+        threshold_pct = strat_info['threshold_pct']
+        launch = strat_info['launch_month']
+
+        label = f"#{strat_info['rank']}: {trigger_short} {threshold_pct}% → {selection_short} ({launch})"
+
+        ax.plot(common_nav['Days_Since_Common_Start'],
+                common_nav['Normalized_NAV'],
+                color=colors[i], linewidth=2.5, alpha=0.9,
+                label=label, zorder=10 - i)
+
+    # Plot benchmarks
+    first_common_nav = aligned_strategies[0]['common_nav']
+
+    # Average benchmarks across all strategies for smoothing
+    spy_avg = []
+    bufr_avg = []
+
+    for day_idx in range(len(first_common_nav)):
+        spy_vals = [s['common_nav']['Normalized_SPY'].iloc[day_idx] for s in aligned_strategies]
+        bufr_vals = [s['common_nav']['Normalized_BUFR'].iloc[day_idx] for s in aligned_strategies]
+
+        spy_avg.append(np.mean(spy_vals))
+        bufr_avg.append(np.mean(bufr_vals))
+
+    days_axis = first_common_nav['Days_Since_Common_Start']
+
+    ax.plot(days_axis, spy_avg,
+            color='#757575', linewidth=2, linestyle='--',
+            alpha=0.7, label='SPY', zorder=5)
+
+    ax.plot(days_axis, bufr_avg,
+            color='#9E9E9E', linewidth=2, linestyle=':',
+            alpha=0.7, label='BUFR', zorder=5)
+
+    # ==========================================================================
+    # STEP 5: FORMATTING
+    # ==========================================================================
+
+    ax.set_xlabel('Days Since Common Start Date', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Normalized NAV (Starting at 100)', fontsize=13, fontweight='bold')
+    ax.set_title(f'Example: December Cap Utilization Threshold --> Select Most Recent Launch\n'
+                 f'Common Period: {latest_start.strftime("%Y-%m-%d")} to {earliest_end.strftime("%Y-%m-%d")}',
+                 fontsize=15, fontweight='bold', pad=20)
+    ax.legend(loc='upper left', fontsize=10, framealpha=0.95)  # Slightly smaller font for longer labels
+    ax.grid(True, alpha=0.3, linestyle=':')
+    ax.axhline(y=100, color='black', linestyle='-', linewidth=1, alpha=0.3)
+
+    # ==========================================================================
+    # STEP 6: ADD STRATEGY DETAILS BOX (with full names)
+    # ==========================================================================
+
+    textstr_lines = ['STRATEGY DETAILS\n' + '─' * 65]
+    textstr_lines.append(f'Common Period: {common_days} days')
+    textstr_lines.append(f'Start: {latest_start.strftime("%Y-%m-%d")}')
+    textstr_lines.append(f'End: {earliest_end.strftime("%Y-%m-%d")}')
+
+    for strat_info in aligned_strategies:
+        row = strat_info['row']
+        rank = strat_info['rank']
+        threshold_pct = strat_info['threshold_pct']
+
+        # Full trigger and selection names for detail box
+        trigger_short = format_trigger_name(strat_info['trigger_type'])
+        selection_short = format_selection_name(strat_info['selection_algo'])
+
+        textstr_lines.append('')  # Blank line
+        textstr_lines.append(f'■ Rank #{rank}: {trigger_short} {threshold_pct}% → {selection_short}')
+        textstr_lines.append(f'  Launch: {row["launch_month"]}')
+        textstr_lines.append(f'  Return: {row["strategy_return"] * 100:+.1f}% | Sharpe: {row["strategy_sharpe"]:.2f}')
+        textstr_lines.append(f'  vs BUFR: {row["vs_bufr_excess"] * 100:+.1f}% | Trades: {int(row["num_trades"])}')
+
+    textstr = '\n'.join(textstr_lines)
+
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.9,
+                 edgecolor='black', linewidth=1.5)
+    ax.text(0.98, 0.02, textstr, transform=ax.transAxes, fontsize=9,
+            verticalalignment='bottom', horizontalalignment='right',
+            bbox=props, family='monospace')
+
+    plt.tight_layout()
+
+    # ==========================================================================
+    # STEP 7: SAVE
+    # ==========================================================================
+
+    filename = 'batch8_normalized_nav_aligned_top5.png'
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"\n    ✓ Saved: {filename}")
+    return filepath
+
+
+def format_trigger_name(trigger_type: str) -> str:
+    """Convert trigger_type to short readable name."""
+    trigger_map = {
+        'cap_utilization_threshold': 'Cap Util',
+        'remaining_cap_threshold': 'Rem Cap',
+        'downside_before_buffer_threshold': 'Downside',
+        'ref_asset_return_threshold': 'Ref Return'
+    }
+    return trigger_map.get(trigger_type, trigger_type)
+
+def format_selection_name(selection_algo: str) -> str:
+    """Convert selection_algo to short readable name."""
+    selection_map = {
+        'select_most_recent_launch': 'Most Recent',
+        'select_remaining_cap_highest': 'Highest Cap',
+        'select_cap_utilization_lowest': 'Lowest Util',
+        'select_cost_analysis': 'Cost Optimized'
+        # ... etc
+    }
+    return selection_map.get(selection_algo, selection_algo)

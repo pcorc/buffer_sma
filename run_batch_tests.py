@@ -44,7 +44,7 @@ sys.path.insert(0, project_root)
 BATCH_NUMBER = 8  # Change this to run different batches (1-6)
 
 # TESTER
-# AUSTIN SCHULTZ CURRENT
+
 def get_batch_0_configs():
     """
     BATCH 0: Threshold Testing - Cap Utilization Analysis
@@ -523,7 +523,7 @@ def get_batch_7_configs():
     # =========================================================================
     configs.append({
         'trigger_type': 'remaining_cap_threshold',
-        'trigger_params': {'threshold': 0.75},  # Switch when 75% cap remaining
+        'trigger_params': {'threshold': 0.25},  # Switch when 75% cap remaining
         'selection_func_name': 'select_remaining_cap_highest',
         'launch_months': months,
         'description': 'Remaining Cap 75% → Highest Cap (Double Bullish)'
@@ -535,7 +535,7 @@ def get_batch_7_configs():
     configs.append({
         'trigger_type': 'cap_utilization_threshold',
         'trigger_params': {'threshold': 0.75},  # Switch when 75% cap utilized
-        'selection_func_name': 'select_cap_utilization_highest',
+        'selection_func_name': 'select_cap_utilization_lowest',
         'launch_months': months,
         'description': 'Cap Util 75% → Highest Util (Double Bearish)'
     })
@@ -564,7 +564,7 @@ def get_batch_7_configs():
 
     return configs
 
-
+# AUSTIN SCHULTZ CURRENT
 def get_batch_8_configs():
     """
     BATCH 8: Comprehensive Threshold Analysis
@@ -575,42 +575,37 @@ def get_batch_8_configs():
     Tests thresholds: 25%, 40%, 75%, 90%
     Strategy: cap_utilization_threshold + select_most_recent_launch
 
-    This batch provides empirical evidence that:
-    1. Very high thresholds (90%) result in excessive cap erosion before rebalancing
-    2. Mid-range thresholds (40-75%) offer better risk/return tradeoff
-    3. Very low thresholds (25%) may trade too frequently with diminishing returns
-
     Generates:
-    - Bar chart comparing average performance across thresholds
-    - Integrated performance table with detailed statistics
-    - CSV export for further analysis
-    - Clear ranking showing 90% as suboptimal choice
+    - Bar chart with performance table
+    - Clear ranking showing 90% as suboptimal
     """
     configs = []
 
     # Test these specific thresholds
-    threshold_levels = [0.25, 0.40, 0.75, 0.90]
+    threshold_levels = [0.55, 0.65, 0.75, 0.90]
+    #threshold_levels = [0.65, 0.90]
 
     # All 12 launch months for comprehensive averaging
-    # This eliminates timing bias by testing across all possible entry points
     months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
               'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+    months = ['DEC',]
 
-    # Create configuration for each threshold
     for threshold in threshold_levels:
         configs.append({
             'trigger_type': 'cap_utilization_threshold',
             'trigger_params': {'threshold': threshold},
             'selection_func_name': 'select_most_recent_launch',
-            'launch_months': months,
-            'description': f'Cap Utilization {int(threshold * 100)}% → Most Recent Launch'
+            'launch_months': months
         })
 
     return configs
 
+
+
 # ============================================================================
 # BATCH SELECTOR
 # ============================================================================
+
 
 BATCH_CONFIGS = {
     0: get_batch_0_configs,
@@ -620,7 +615,7 @@ BATCH_CONFIGS = {
     4: get_batch_4_configs,
     5: get_batch_5_configs,
     7: get_batch_7_configs,  # ← ADD THIS
-    8: get_batch_7_configs  # ← ADD THIS
+    8: get_batch_8_configs  # ← ADD THIS
 }
 
 BATCH_DESCRIPTIONS = {
