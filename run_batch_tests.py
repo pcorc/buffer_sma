@@ -41,7 +41,6 @@ sys.path.insert(0, project_root)
 # CONFIGURATION: SELECT BATCH TO RUN
 # ============================================================================
 
-BATCH_NUMBER = 8  # Change this to run different batches (1-6)
 
 # TESTER
 
@@ -62,17 +61,24 @@ def get_batch_0_configs():
     configs = []
 
     # Test these specific thresholds
-    threshold_levels = [0.25, 0.40, 0.75, 0.90]
+    threshold_levels = [0.15, 0.50, 0.85]
 
     # All launch months for fair comparison
     months = ['SEP']
 
     for threshold in threshold_levels:
+        # configs.append({
+        #     'trigger_type': 'rebalance_time_period',
+        #     'trigger_params': {'frequency': 'quarterly'},
+        #     'selection_func_name': 'select_downside_buffer_lowest',
+        #     'launch_months': months,
+        # })
+
         configs.append({
-            'trigger_type': 'cap_utilization_threshold',
+            'trigger_type': 'remaining_buffer_threshold',
             'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_most_recent_launch',
-            'launch_months': months
+            'selection_func_name': 'select_downside_buffer_lowest',
+            'launch_months': months,
         })
 
     return configs
@@ -516,50 +522,39 @@ def get_batch_7_configs():
     configs = []
 
     # Only SEP month for direct comparison
-    months = ['OCT']
+    months = ['SEP']
 
     # =========================================================================
     # Strategy 1: Remaining Cap 75% → Highest Remaining Cap
     # =========================================================================
     configs.append({
-        'trigger_type': 'remaining_cap_threshold',
-        'trigger_params': {'threshold': 0.25},  # Switch when 75% cap remaining
+        'trigger_type': 'rebalance_time_period',
+        'trigger_params': {'frequency': 'quarterly'},
         'selection_func_name': 'select_remaining_cap_highest',
-        'launch_months': months,
-        'description': 'Remaining Cap 75% → Highest Cap (Double Bullish)'
-    })
+        'launch_months': months,    })
 
     # =========================================================================
     # Strategy 2: Cap Utilization 75% → Highest Utilization
     # =========================================================================
     configs.append({
         'trigger_type': 'cap_utilization_threshold',
-        'trigger_params': {'threshold': 0.75},  # Switch when 75% cap utilized
+        'trigger_params': {'threshold': 0.65},  # Switch when 75% cap utilized
         'selection_func_name': 'select_cap_utilization_lowest',
+        'launch_months': months,    })
+
+
+    configs.append({
+        'trigger_type': 'rebalance_time_period',
+        'trigger_params': {'frequency': 'quarterly'},
+        'selection_func_name': 'select_remaining_buffer_lowest',
         'launch_months': months,
-        'description': 'Cap Util 75% → Highest Util (Double Bearish)'
     })
 
-    # =========================================================================
-    # Strategy 3: Cap Utilization 75% → Lowest Utilization
-    # =========================================================================
     configs.append({
-        'trigger_type': 'cap_utilization_threshold',
-        'trigger_params': {'threshold': 0.75},  # Switch when 75% cap utilized
-        'selection_func_name': 'select_cap_utilization_lowest',
+        'trigger_type': 'remaining_buffer_threshold',
+        'trigger_params': {'threshold': 0.85},
+        'selection_func_name': 'select_downside_buffer_lowest',
         'launch_months': months,
-        'description': 'Cap Util 75% → Lowest Util (Hybrid: Late exit → Fresh cap)'
-    })
-
-    # =========================================================================
-    # Strategy 4: Downside Buffer 50% → Lowest Utilization
-    # =========================================================================
-    configs.append({
-        'trigger_type': 'downside_before_buffer_threshold',
-        'trigger_params': {'threshold': 0.50},  # Switch at 50% before buffer
-        'selection_func_name': 'select_cap_utilization_lowest',
-        'launch_months': months,
-        'description': 'Downside 50% → Lowest Util (Hybrid: Buffer threat → Fresh cap)'
     })
 
     return configs
@@ -601,10 +596,85 @@ def get_batch_8_configs():
     return configs
 
 
+def get_batch_9_configs():
+    """
+    BATCH 9: Remaining Buffer Testing (New Feature Validation)
+    Tests: 16 strategies × 1 month = 16 simulations
+    Estimated time: ~5 minutes
+
+    Purpose: Validate new remaining buffer selection and trigger functions.
+
+    Two strategy groups:
+    1. GROUP 13: Time-based + select_remaining_buffer_lowest (4 strategies)
+       - Tests: Monthly, Quarterly, Semi-annual, Annual frequencies
+       - All paired with new remaining_buffer_lowest selection
+
+    2. GROUP 14: Buffer threshold triggers (12 strategies)
+       - Tests: 3 thresholds (15%, 50%, 85%) × 4 selections
+       - Thresholds indicate when to rotate based on buffer depletion
+       - Selections: remaining_buffer_lowest, downside_buffer_lowest,
+                     most_recent_launch, cap_utilization_lowest
+
+    All strategies are BEARISH (defensive capital preservation focus).
+    Uses SEP month only for quick validation.
+
+    Expected Results:
+    - Strategies should trade more in bear markets
+    - Lower threshold (15%) = more sensitive/frequent rotation
+    - Higher threshold (85%) = conservative/infrequent rotation
+    - Double bearish (buffer threshold + buffer selection) should show
+      strongest defensive characteristics
+    """
+    configs = []
+
+    # Use single month for quick testing
+    months = ['SEP']
+
+    # =========================================================================
+    # GROUP 13: Time-Based + Remaining Buffer Selection
+    # =========================================================================
+
+    frequencies = ['quarterly']
+
+    for freq in frequencies:
+        configs.append({
+            'trigger_type': 'rebalance_time_period',
+            'trigger_params': {'frequency': freq},
+            'selection_func_name': 'select_remaining_buffer_lowest',
+            'launch_months': months,
+            'strategy_intent': 'bearish',
+            'description': f'{freq.title()} → lowest buffer (GROUP 13)'
+        })
+
+    # =========================================================================
+    # GROUP 14: Buffer Threshold Triggers
+    # =========================================================================
+
+    thresholds = [0.15, 0.50, 0.85]
+
+    selections = [
+        'select_remaining_buffer_lowest',  # Double bearish
+    ]
+
+    for threshold in thresholds:
+        for selection in selections:
+            configs.append({
+                'trigger_type': 'remaining_buffer_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'launch_months': months,
+                'strategy_intent': 'bearish',
+                'description': f'Buffer {threshold * 100:.0f}% → {selection} (GROUP 14)'
+            })
+
+    return configs
+
 
 # ============================================================================
 # BATCH SELECTOR
 # ============================================================================
+
+BATCH_NUMBER = 7  # Change this to run different batches (1-6)
 
 
 BATCH_CONFIGS = {
@@ -614,8 +684,10 @@ BATCH_CONFIGS = {
     3: get_batch_3_configs,
     4: get_batch_4_configs,
     5: get_batch_5_configs,
-    7: get_batch_7_configs,  # ← ADD THIS
-    8: get_batch_8_configs  # ← ADD THIS
+    7: get_batch_7_configs,
+    8: get_batch_8_configs,
+    9: get_batch_9_configs
+
 }
 
 BATCH_DESCRIPTIONS = {
@@ -625,8 +697,9 @@ BATCH_DESCRIPTIONS = {
     3: "Remaining Cap Tactical",
     4: "Market-Responsive (Ref Asset + Buffer)",
     5: "Comprehensive Regime-Optimized (180 sims, 6 months, expanded thresholds)",
-    7: "Random Assortment",  # ← ADD THIS
-    8: "Schultz"  # ← ADD THIS
+    7: "Random Assortment",
+    8: "Schultz",
+    9: "Remaining Buffer Testing (16 sims, validation)"
 
 }
 
@@ -744,17 +817,6 @@ def main():
         for regime, df in optimal_3m.items():
             print(f"  {regime}: {len(df) if df is not None and not df.empty else 0} strategies")
 
-    # Check what's in future_regime_df
-    if not future_regime_df.empty:
-        print("\n6M regime distribution in future_regime_df:")
-        if 'future_regime_6m' in future_regime_df.columns:
-            print(future_regime_df['future_regime_6m'].value_counts())
-        print("\n3M regime distribution in future_regime_df:")
-        if 'future_regime_3m' in future_regime_df.columns:
-            print(future_regime_df['future_regime_3m'].value_counts())
-
-    # Export
-    print("\nExporting results...")
     output_dir = os.path.join(settings.RESULTS_DIR, f'batch_{BATCH_NUMBER}')
     os.makedirs(output_dir, exist_ok=True)
 

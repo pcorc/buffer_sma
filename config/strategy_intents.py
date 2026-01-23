@@ -191,6 +191,32 @@ def build_intent_map() -> Dict[Tuple[str, str], str]:
         key = (f'downside_before_buffer_threshold|{threshold}', 'select_cost_analysis')
         intent_map[key] = 'cost_optimized'
 
+    # =========================================================================
+    # GROUP 13: Time-Based + Remaining Buffer Selection
+    # Intent: BEARISH - Seek funds in/near buffer zone (defensive)
+    # =========================================================================
+
+    for freq in ['monthly', 'quarterly', 'semi_annual', 'annual']:
+        key = (f'rebalance_time_period|{freq}', 'select_remaining_buffer_lowest')
+        intent_map[key] = 'bearish'
+
+    # =========================================================================
+    # GROUP 14: Buffer Threshold Triggers
+    # Intent: BEARISH - All combinations defensive in nature
+    # =========================================================================
+
+    for threshold in [0.15, 0.50, 0.85]:
+        # All selections with buffer threshold are bearish
+        for selection in [
+            'select_remaining_buffer_lowest',
+            'select_downside_buffer_lowest',
+            'select_most_recent_launch',
+            'select_cap_utilization_lowest'
+        ]:
+            key = (f'remaining_buffer_threshold|{threshold}', selection)
+            intent_map[key] = 'bearish'
+
+
     return intent_map
 
 
@@ -381,13 +407,8 @@ def print_intent_breakdown_by_group():
 # =============================================================================
 
 def validate_intent_map():
-    """
-    Validate that all expected combinations are in the intent map.
-
-    Returns:
-        Tuple of (is_valid, missing_combinations)
-    """
-    expected_count = 68
+    """Validate that all expected combinations are in the intent map."""
+    expected_count = 84  # Updated from 68
     actual_count = len(STRATEGY_INTENT_MAP)
 
     is_valid = (actual_count == expected_count)

@@ -183,6 +183,7 @@ def select_downside_buffer_lowest(df_universe, current_date, series='F'):
         return df_universe.iloc[0]['Fund']
 
     # Find minimum downside
+    valid_funds[downside_col] = abs(valid_funds[downside_col])
     min_downside = valid_funds[downside_col].min()
 
     # Filter to funds with min downside
@@ -359,6 +360,59 @@ def select_cost_analysis(df_universe, current_date, series='F'):
     return min_cost_funds.iloc[0]['Fund']
 
 
+def select_remaining_buffer_lowest(df_universe, current_date, series='F'):
+    """
+    Select fund with LOWEST remaining buffer (bearish/defensive).
+
+    Chooses funds where Remaining Buffer is most depleted, indicating
+    the fund is closest to or in the buffer zone (defensive positioning).
+
+    Logic:
+    - Lower Remaining Buffer = closer to buffer activation
+    - For F-series: Original Buffer = 10%
+      - If Remaining Buffer = 8%, fund has 2% buffer cushion used
+      - If Remaining Buffer = 5%, fund has 5% buffer cushion used (MORE defensive)
+
+    This is bearish because:
+    - Targets funds experiencing market stress
+    - Positions in funds closest to full buffer protection
+    - Defensive capital preservation focus
+
+    Parameters:
+      df_universe: DataFrame with all funds on current date
+      current_date: Current date
+      series: Fund series
+
+    Returns:
+      String: Fund ticker with lowest remaining buffer
+    """
+    if df_universe.empty:
+        return None
+
+    buffer_col = 'Remaining Buffer'
+
+    if buffer_col not in df_universe.columns:
+        return select_most_recent_launch(df_universe, current_date, series)
+
+    # Filter out null values
+    valid_funds = df_universe[df_universe[buffer_col].notna()].copy()
+
+    if valid_funds.empty:
+        return select_most_recent_launch(df_universe, current_date, series)
+
+    # Find minimum remaining buffer (most depleted)
+    min_buffer = valid_funds[buffer_col].min()
+
+    # Filter to funds with min buffer
+    min_buffer_funds = valid_funds[valid_funds[buffer_col] == min_buffer].copy()
+
+    # If tie, use most recent launch as tiebreaker
+    if len(min_buffer_funds) > 1:
+        return select_most_recent_launch(min_buffer_funds, current_date, series)
+
+    return min_buffer_funds.iloc[0]['Fund']
+
+
 # Selection registry for dynamic lookup
 SELECTION_REGISTRY = {
     'select_most_recent_launch': select_most_recent_launch,
@@ -371,7 +425,9 @@ SELECTION_REGISTRY = {
     'select_downside_buffer_highest': select_downside_buffer_highest,
     'select_downside_buffer_lowest': select_downside_buffer_lowest,
     'select_highest_outcome_and_cap': select_highest_outcome_and_cap,
-    'select_cost_analysis': select_cost_analysis
+    'select_cost_analysis': select_cost_analysis,
+    'select_remaining_buffer_lowest': select_remaining_buffer_lowest,
+
 }
 
 

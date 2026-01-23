@@ -231,7 +231,6 @@ def plot_all_strategies_with_best(
 
     Adapts to single-intent or multi-intent batches.
     """
-    print("\n  Generating: All Strategies with Best Highlighted...")
 
     summary_df = _ensure_intent_column(summary_df)
     best = _find_best_strategies(summary_df)
@@ -242,8 +241,8 @@ def plot_all_strategies_with_best(
     plotted_intents = set()
 
     # Get best strategy IDs
-    best_bullish_id = _create_strategy_id(best['bullish_sharpe']) if 'bullish_sharpe' in best else None
-    best_bearish_id = _create_strategy_id(best['bearish_sharpe']) if 'bearish_sharpe' in best else None
+    best_bullish_id = create_strategy_id(best['bullish_sharpe']) if 'bullish_sharpe' in best else None
+    best_bearish_id = create_strategy_id(best['bearish_sharpe']) if 'bearish_sharpe' in best else None
 
     # Plot all strategies
     for result in results_list:
@@ -343,10 +342,6 @@ def plot_threshold_comparison(
         (summary_df_copy['selection_algo'] == 'select_most_recent_launch') &
         (summary_df_copy['threshold_value'].notna())
     ].copy()
-
-    if threshold_data.empty:
-        print("    ⚠ No threshold data - skipping")
-        return None
 
     # Create figure
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
@@ -460,9 +455,6 @@ def plot_threshold_performance_with_table(
         (summary_df_copy['threshold_value'].notna())
         ].copy()
 
-    if threshold_data.empty:
-        print("    ⚠ No threshold data - skipping")
-        return None
 
     # Calculate statistics by threshold
     stats_by_threshold = []
@@ -1139,173 +1131,6 @@ def plot_performance_metrics_comparison(
 # =============================================================================
 
 
-def plot_batch8_normalized_nav(
-        results_list: List[Dict],
-        summary_df: pd.DataFrame,
-        output_dir: str,
-        top_n: int = 5
-) -> Optional[str]:
-    """
-    Create normalized NAV plot for Batch 8 threshold analysis.
-
-    All strategies start at NAV=100 on Day 0, plotted on relative time axis.
-    Shows top 5 performers with detailed strategy information.
-
-    Parameters:
-        results_list: List of backtest result dicts
-        summary_df: Summary DataFrame with performance metrics
-        output_dir: Directory to save plot
-        top_n: Number of top strategies to plot (default 5)
-
-    Returns:
-        Filepath if successful, None otherwise
-    """
-    import ast
-
-    print(f"\n  Generating: Batch 8 Normalized NAV Plot (Top {top_n})...")
-
-    if summary_df.empty or not results_list:
-        print("    ⚠ No data available - skipping")
-        return None
-
-    # Get top N strategies by Sharpe ratio
-    top_strategies = summary_df.nlargest(top_n, 'strategy_sharpe')
-
-    # Create strategy IDs for matching
-    def create_strategy_id(row):
-        return f"{row['launch_month']}_{row['trigger_type']}_{row['selection_algo']}"
-
-    top_strategy_ids = [create_strategy_id(row) for _, row in top_strategies.iterrows()]
-
-    # Color palette for top 5 strategies
-    colors = ['#2E7D32', '#1565C0', '#F57C00', '#7B1FA2', '#C62828']
-
-    # Create figure
-    fig, ax = plt.subplots(figsize=(16, 9))
-
-    # Track plotted strategies for legend and details
-    plotted_strategies = []
-
-    # Plot each top strategy
-    for i, (idx, row) in enumerate(top_strategies.iterrows()):
-        strategy_id = create_strategy_id(row)
-
-        # Find matching result
-        for result in results_list:
-            result_id = create_strategy_id(result)
-
-            if result_id == strategy_id:
-                # Get daily performance data
-                daily_nav = result['daily_performance'].copy()
-
-                # Normalize to start at 100
-                first_nav = daily_nav['Strategy_NAV'].iloc[0]
-                daily_nav['Normalized_NAV'] = (daily_nav['Strategy_NAV'] / first_nav) * 100
-
-                # Create relative time axis (days since inception)
-                daily_nav['Days_Since_Inception'] = range(len(daily_nav))
-
-                # Extract threshold for label
-                try:
-                    params = ast.literal_eval(row['trigger_params'])
-                    threshold = int(params.get('threshold', 0) * 100)
-                except:
-                    threshold = 0
-
-                # Create label
-                label = f"#{i + 1}: {threshold}% Threshold ({row['launch_month']})"
-
-                # Plot normalized NAV
-                ax.plot(daily_nav['Days_Since_Inception'],
-                        daily_nav['Normalized_NAV'],
-                        color=colors[i], linewidth=2.5, alpha=0.9,
-                        label=label, zorder=10 - i)
-
-                # Store for details box
-                plotted_strategies.append({
-                    'rank': i + 1,
-                    'row': row,
-                    'color': colors[i],
-                    'threshold': threshold,
-                    'daily_nav': daily_nav
-                })
-
-                print(f"    Plotted Rank #{i + 1}: {threshold}% ({row['launch_month']}) - Sharpe: {row['strategy_sharpe']:.2f}")
-
-                break
-
-    # Plot benchmarks (normalized to same start point as strategies)
-    if plotted_strategies:
-        first_strategy_id = create_strategy_id(plotted_strategies[0]['row'])
-
-        for result in results_list:
-            if create_strategy_id(result) == first_strategy_id:
-                benchmark_daily = result['daily_performance'].copy()
-
-                # Normalize benchmarks to start at 100
-                first_spy = benchmark_daily['SPY_NAV'].iloc[0]
-                first_bufr = benchmark_daily['BUFR_NAV'].iloc[0]
-
-                benchmark_daily['Normalized_SPY'] = (benchmark_daily['SPY_NAV'] / first_spy) * 100
-                benchmark_daily['Normalized_BUFR'] = (benchmark_daily['BUFR_NAV'] / first_bufr) * 100
-                benchmark_daily['Days_Since_Inception'] = range(len(benchmark_daily))
-
-                # Plot benchmarks
-                ax.plot(benchmark_daily['Days_Since_Inception'],
-                        benchmark_daily['Normalized_SPY'],
-                        color='#757575', linewidth=2, linestyle='--',
-                        alpha=0.7, label='SPY', zorder=5)
-
-                ax.plot(benchmark_daily['Days_Since_Inception'],
-                        benchmark_daily['Normalized_BUFR'],
-                        color='#9E9E9E', linewidth=2, linestyle=':',
-                        alpha=0.7, label='BUFR', zorder=5)
-
-                break
-
-    # Formatting
-    ax.set_xlabel('Days Since Inception', fontsize=13, fontweight='bold')
-    ax.set_ylabel('Normalized NAV (Starting at 100)', fontsize=13, fontweight='bold')
-    ax.set_title('Top 5 Cap Utilization Threshold Strategies - Normalized Performance',
-                 fontsize=16, fontweight='bold', pad=20)
-    ax.legend(loc='upper left', fontsize=11, framealpha=0.95)
-    ax.grid(True, alpha=0.3, linestyle=':')
-    ax.axhline(y=100, color='black', linestyle='-', linewidth=1, alpha=0.3)
-
-    # Add strategy details box
-    if plotted_strategies:
-        textstr_lines = ['STRATEGY DETAILS\n' + '─' * 50]
-
-        for strat_info in plotted_strategies:
-            row = strat_info['row']
-            rank = strat_info['rank']
-            threshold = strat_info['threshold']
-
-            textstr_lines.append('')  # Blank line
-            textstr_lines.append(f'■ Rank #{rank}: {threshold}% Threshold')
-            textstr_lines.append(f'  Launch: {row["launch_month"]}')
-            textstr_lines.append(f'  Return: {row["strategy_return"] * 100:+.1f}% | Sharpe: {row["strategy_sharpe"]:.2f}')
-            textstr_lines.append(f'  vs BUFR: {row["vs_bufr_excess"] * 100:+.1f}% | Trades: {int(row["num_trades"])}')
-
-        textstr = '\n'.join(textstr_lines)
-
-        # Position in bottom-right
-        props = dict(boxstyle='round', facecolor='wheat', alpha=0.9,
-                     edgecolor='black', linewidth=1.5)
-        ax.text(0.98, 0.02, textstr, transform=ax.transAxes, fontsize=9,
-                verticalalignment='bottom', horizontalalignment='right',
-                bbox=props, family='monospace')
-
-    plt.tight_layout()
-
-    filename = 'batch8_normalized_nav_top5.png'
-    filepath = os.path.join(output_dir, filename)
-    plt.savefig(filepath, dpi=300, bbox_inches='tight')
-    plt.close()
-
-    print(f"    ✓ Saved: {filename}")
-    return filepath
-
 
 def generate_batch_visualizations(
         results_list: List[Dict],
@@ -1389,11 +1214,31 @@ def generate_batch_visualizations(
             if filepath:
                 generated_plots['threshold_regime_6m'] = filepath
 
+        if batch_number == 7:
+            filepath = plot_batch_7_four_strategies(results_list, summary_df, output_dir)
+            if filepath:
+                generated_plots['batch7_four_strategies'] = filepath
+
+        if batch_number == 9:
+            filepath = plot_batch8_normalized_nav_ALIGNED_DETAILED_LEGEND(results_list, summary_df, output_dir)
+            if filepath:
+                generated_plots['batch7_four_strategies'] = filepath
+
         elif batch_number == 0 or _has_threshold_strategies(summary_df):
             # Use original threshold comparison for other batches
             filepath = plot_threshold_comparison(summary_df, output_dir)
             if filepath:
                 generated_plots['threshold_comparison'] = filepath
+
+            filepath = plot_threshold_performance_with_table(summary_df, output_dir)
+            if filepath:
+                generated_plots['batch8_threshold_performance'] = filepath
+
+            # Normalized NAV plot (top 5)
+            filepath = plot_batch8_normalized_nav_ALIGNED_DETAILED_LEGEND(results_list, summary_df, output_dir, top_n=5)
+            if filepath:
+                generated_plots['normalized_nav_aligned'] = filepath
+
 
     # Regime performance (if we have regime data and optimal strategies)
     if not future_regime_df.empty and optimal_strategies:
@@ -1685,28 +1530,28 @@ def plot_batch_7_four_strategies(
             'color': '#2E7D32',  # Dark green (bullish)
             'linestyle': '-',
             'linewidth': 3.0,
-            'label': 'Strategy 1: RemCap 75% → Highest Cap',
+            'label': 'Bull #1: Quarterly Rebal → Highest Cap',
             'short_label': 'RemCap→High'
         },
         {
-            'color': '#D32F2F',  # Dark red (bearish)
+            'color': '#1565C0',  # Dark blue (bearish)
             'linestyle': '-',
             'linewidth': 3.0,
-            'label': 'Strategy 2: CapUtil 75% → Highest Util',
-            'short_label': 'CapUtil→High'
-        },
-        {
-            'color': '#1565C0',  # Dark blue (hybrid aggressive)
-            'linestyle': '-',
-            'linewidth': 3.0,
-            'label': 'Strategy 3: CapUtil 75% → Lowest Util',
+            'label': 'Bull #2: Cap Util 75% → Lowest CapUtil',
             'short_label': 'CapUtil→Low'
         },
         {
-            'color': '#F57C00',  # Dark orange (hybrid defensive)
+            'color': '#F57C00',  # Dark red (hybrid aggressive)
             'linestyle': '-',
             'linewidth': 3.0,
-            'label': 'Strategy 4: Downside 50% → Lowest Util',
+            'label': 'Neutral: Quarterly Rebal → Lowest Buffer Remain',
+            'short_label': 'CapUtil→Low'
+        },
+        {
+            'color': '#D32F2F',  # Dark orange (hybrid defensive)
+            'linestyle': '-',
+            'linewidth': 3.0,
+            'label': 'Defensive: Buffer Util 15% → Lowest Downside Buffer Remain',
             'short_label': 'Downside→Low'
         }
     ]
@@ -1907,10 +1752,6 @@ def plot_threshold_performance_with_table(
         (summary_df_copy['threshold_value'].notna())
         ].copy()
 
-    if threshold_data.empty:
-        print("    ⚠ No threshold data - skipping")
-        return None
-
     # Calculate statistics by threshold
     stats_by_threshold = []
 
@@ -2108,7 +1949,6 @@ def plot_best_strategies_comparison(
     Returns:
         Filepath to saved plot
     """
-    print("\n  Generating: Best Strategies Comparison...")
 
     summary_df = _ensure_intent_column(summary_df)
 
@@ -2119,8 +1959,6 @@ def plot_best_strategies_comparison(
     if max_strategies is None:
         max_strategies = min(num_unique_strategies, 10)
 
-    print(f"    Total unique strategies: {num_unique_strategies}")
-    print(f"    Showing top {max_strategies} by Sharpe ratio")
 
     # Dynamic figure sizing based on number of strategies
     fig_height = max(8, 6 + max_strategies * 0.3)  # Add height for more strategies
@@ -2246,7 +2084,6 @@ def plot_best_strategies_comparison(
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print(f"    ✓ Saved: {filename}")
     return filepath
 
 
@@ -2365,7 +2202,6 @@ def plot_batch8_normalized_nav_ALIGNED_DETAILED_LEGEND(
     Returns:
         Filepath if successful, None otherwise
     """
-    print(f"\n  Generating: Batch 8 Normalized NAV Plot - Common Date Range (Top {top_n})...")
 
     if summary_df.empty or not results_list:
         print("    ⚠ No data available - skipping")
@@ -2421,7 +2257,6 @@ def plot_batch8_normalized_nav_ALIGNED_DETAILED_LEGEND(
     latest_start = None
     earliest_end = None
 
-    print("\n    Collecting strategy data:")
 
     for i, (idx, row) in enumerate(top_strategies.iterrows()):
         strategy_id = create_strategy_id(row)
@@ -2483,14 +2318,9 @@ def plot_batch8_normalized_nav_ALIGNED_DETAILED_LEGEND(
 
     common_days = (earliest_end - latest_start).days
 
-    print(f"\n    Common date range: {latest_start.date()} to {earliest_end.date()}")
-    print(f"    Common period: {common_days} days")
-
     # ==========================================================================
     # STEP 3: FILTER ALL STRATEGIES TO COMMON PERIOD AND NORMALIZE
     # ==========================================================================
-
-    print("\n    Normalizing to common period:")
 
     aligned_strategies = []
 
@@ -2636,7 +2466,6 @@ def plot_batch8_normalized_nav_ALIGNED_DETAILED_LEGEND(
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print(f"\n    ✓ Saved: {filename}")
     return filepath
 
 

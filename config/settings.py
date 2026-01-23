@@ -79,15 +79,21 @@ THRESHOLD_LEVELS = [0.15, 0.50, 0.85]  # 15%, 50%, 85%
 
 def generate_combo_configs():
     """
-    Generate all 68 strategy combinations programmatically.
+    Generate all strategy combinations programmatically.
+
+    NOW INCLUDES:
+    - GROUP 13: Time-Based + Remaining Buffer Selection (4 strategies)
+    - GROUP 14: Buffer Threshold Triggers (12 strategies)
 
     Returns:
         List of dicts with 'trigger_type', 'trigger_params', 'selection_func_name'
     """
     combos = []
 
+    # ... existing GROUP 1-12 code ...
+
     # =========================================================================
-    # GROUP 1: Time-Based Rebalancing + Most Recent Launch (NEUTRAL)
+    # GROUP 13: Time-Based + Remaining Buffer Selection (BEARISH)
     # Count: 4 strategies
     # =========================================================================
 
@@ -95,254 +101,35 @@ def generate_combo_configs():
         combos.append({
             'trigger_type': 'rebalance_time_period',
             'trigger_params': {'frequency': freq},
-            'selection_func_name': 'select_most_recent_launch',
-            'group': 'GROUP_1_TIME_NEUTRAL',
-            'description': f'{freq.title()} rebalance to most recent launch'
+            'selection_func_name': 'select_remaining_buffer_lowest',
+            'group': 'GROUP_13_TIME_BUFFER_BEARISH',
+            'description': f'{freq.title()} rebalance to lowest remaining buffer'
         })
 
     # =========================================================================
-    # GROUP 2: Time-Based + Remaining Cap Selection (DIRECTIONAL)
-    # Count: 8 strategies (4 bullish + 4 bearish)
+    # GROUP 14: Buffer Threshold Triggers (BEARISH)
+    # Count: 12 strategies (3 thresholds × 4 selections)
     # =========================================================================
 
-    # GROUP 2A: BULLISH (Highest Cap)
-    for freq in REBALANCE_FREQUENCIES:
-        combos.append({
-            'trigger_type': 'rebalance_time_period',
-            'trigger_params': {'frequency': freq},
-            'selection_func_name': 'select_remaining_cap_highest',
-            'group': 'GROUP_2A_TIME_CAP_BULLISH',
-            'description': f'{freq.title()} rebalance to highest remaining cap'
-        })
+    # Selection algorithms that pair well with buffer triggers
+    buffer_selections = [
+        'select_remaining_buffer_lowest',  # Double bearish
+        'select_downside_buffer_lowest',  # Defensive pairing
+        'select_most_recent_launch',  # Fresh protection
+        'select_cap_utilization_lowest'  # Upside opportunity
+    ]
 
-    # GROUP 2B: BEARISH (Lowest Cap)
-    for freq in REBALANCE_FREQUENCIES:
-        combos.append({
-            'trigger_type': 'rebalance_time_period',
-            'trigger_params': {'frequency': freq},
-            'selection_func_name': 'select_remaining_cap_lowest',
-            'group': 'GROUP_2B_TIME_CAP_BEARISH',
-            'description': f'{freq.title()} rebalance to lowest remaining cap'
-        })
-
-    # =========================================================================
-    # GROUP 3: Time-Based + Downside Before Buffer Selection (DIRECTIONAL)
-    # Count: 8 strategies (4 bullish + 4 bearish)
-    # =========================================================================
-
-    # GROUP 3A: BULLISH (Highest Downside Buffer)
-    for freq in REBALANCE_FREQUENCIES:
-        combos.append({
-            'trigger_type': 'rebalance_time_period',
-            'trigger_params': {'frequency': freq},
-            'selection_func_name': 'select_downside_buffer_highest',
-            'group': 'GROUP_3A_TIME_DOWNSIDE_BULLISH',
-            'description': f'{freq.title()} rebalance to highest downside before buffer'
-        })
-
-    # GROUP 3B: BEARISH (Lowest Downside Buffer)
-    for freq in REBALANCE_FREQUENCIES:
-        combos.append({
-            'trigger_type': 'rebalance_time_period',
-            'trigger_params': {'frequency': freq},
-            'selection_func_name': 'select_downside_buffer_lowest',
-            'group': 'GROUP_3B_TIME_DOWNSIDE_BEARISH',
-            'description': f'{freq.title()} rebalance to lowest downside before buffer'
-        })
-
-    # =========================================================================
-    # GROUP 4: Time-Based + Cap Utilization Selection (DIRECTIONAL)
-    # Count: 8 strategies (4 bullish + 4 bearish)
-    # =========================================================================
-
-    # GROUP 4A: BULLISH (Lowest Cap Utilization)
-    for freq in REBALANCE_FREQUENCIES:
-        combos.append({
-            'trigger_type': 'rebalance_time_period',
-            'trigger_params': {'frequency': freq},
-            'selection_func_name': 'select_cap_utilization_lowest',
-            'group': 'GROUP_4A_TIME_UTIL_BULLISH',
-            'description': f'{freq.title()} rebalance to lowest cap utilization'
-        })
-
-    # GROUP 4B: BEARISH (Highest Cap Utilization)
-    for freq in REBALANCE_FREQUENCIES:
-        combos.append({
-            'trigger_type': 'rebalance_time_period',
-            'trigger_params': {'frequency': freq},
-            'selection_func_name': 'select_cap_utilization_highest',
-            'group': 'GROUP_4B_TIME_UTIL_BEARISH',
-            'description': f'{freq.title()} rebalance to highest cap utilization'
-        })
-
-    # =========================================================================
-    # GROUP 5: Remaining Cap Threshold + Most Recent Launch (BULLISH)
-    # Count: 3 strategies
-    # =========================================================================
-
-    for threshold in THRESHOLD_LEVELS:
-        combos.append({
-            'trigger_type': 'remaining_cap_threshold',
-            'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_most_recent_launch',
-            'group': 'GROUP_5_CAP_THRESHOLD_BULLISH',
-            'description': f'Switch at {threshold*100:.0f}% remaining cap to most recent'
-        })
-
-    # =========================================================================
-    # GROUP 6: Remaining Cap Threshold + Ranked Cap Selection (DIRECTIONAL)
-    # Count: 6 strategies (3 bullish + 3 neutral)
-    # =========================================================================
-
-    # GROUP 6A: BULLISH² (Threshold + Highest Cap)
-    for threshold in THRESHOLD_LEVELS:
-        combos.append({
-            'trigger_type': 'remaining_cap_threshold',
-            'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_remaining_cap_highest',
-            'group': 'GROUP_6A_CAP_THRESHOLD_CAP_BULLISH',
-            'description': f'Switch at {threshold*100:.0f}% remaining cap to highest cap'
-        })
-
-    # GROUP 6B: NEUTRAL (Threshold + Lowest Cap)
-    for threshold in THRESHOLD_LEVELS:
-        combos.append({
-            'trigger_type': 'remaining_cap_threshold',
-            'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_remaining_cap_lowest',
-            'group': 'GROUP_6B_CAP_THRESHOLD_CAP_NEUTRAL',
-            'description': f'Switch at {threshold*100:.0f}% remaining cap to lowest cap'
-        })
-
-    # =========================================================================
-    # GROUP 7: Cap Utilization Threshold + Most Recent Launch (BULLISH)
-    # Count: 3 strategies
-    # =========================================================================
-
-    for threshold in THRESHOLD_LEVELS:
-        combos.append({
-            'trigger_type': 'cap_utilization_threshold',
-            'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_most_recent_launch',
-            'group': 'GROUP_7_UTIL_THRESHOLD_BULLISH',
-            'description': f'Switch at {threshold*100:.0f}% cap utilization to most recent'
-        })
-
-    # =========================================================================
-    # GROUP 8: Cap Utilization Threshold + Ranked Utilization (DIRECTIONAL)
-    # Count: 6 strategies (3 bullish + 3 neutral)
-    # =========================================================================
-
-    # GROUP 8A: BULLISH² (Threshold + Lowest Utilization)
-    for threshold in THRESHOLD_LEVELS:
-        combos.append({
-            'trigger_type': 'cap_utilization_threshold',
-            'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_cap_utilization_lowest',
-            'group': 'GROUP_8A_UTIL_THRESHOLD_UTIL_BULLISH',
-            'description': f'Switch at {threshold*100:.0f}% utilization to lowest utilization'
-        })
-
-    # GROUP 8B: NEUTRAL (Threshold + Highest Utilization)
-    for threshold in THRESHOLD_LEVELS:
-        combos.append({
-            'trigger_type': 'cap_utilization_threshold',
-            'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_cap_utilization_highest',
-            'group': 'GROUP_8B_UTIL_THRESHOLD_UTIL_NEUTRAL',
-            'description': f'Switch at {threshold*100:.0f}% utilization to highest utilization'
-        })
-
-    # =========================================================================
-    # GROUP 9: Downside Before Buffer Threshold + Most Recent (BEARISH)
-    # Count: 3 strategies
-    # =========================================================================
-
-    for threshold in THRESHOLD_LEVELS:
-        combos.append({
-            'trigger_type': 'downside_before_buffer_threshold',
-            'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_most_recent_launch',
-            'group': 'GROUP_9_DOWNSIDE_THRESHOLD_BEARISH',
-            'description': f'Switch at {threshold*100:.0f}% downside to most recent'
-        })
-
-    # =========================================================================
-    # GROUP 10: Downside Threshold + Ranked Downside Selection (DIRECTIONAL)
-    # Count: 6 strategies (3 neutral + 3 bearish)
-    # =========================================================================
-
-    # GROUP 10A: NEUTRAL (Threshold + Highest Downside)
-    for threshold in THRESHOLD_LEVELS:
-        combos.append({
-            'trigger_type': 'downside_before_buffer_threshold',
-            'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_downside_buffer_highest',
-            'group': 'GROUP_10A_DOWNSIDE_THRESHOLD_DOWNSIDE_NEUTRAL',
-            'description': f'Switch at {threshold*100:.0f}% downside to highest downside'
-        })
-
-    # GROUP 10B: BEARISH² (Threshold + Lowest Downside)
-    for threshold in THRESHOLD_LEVELS:
-        combos.append({
-            'trigger_type': 'downside_before_buffer_threshold',
-            'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_downside_buffer_lowest',
-            'group': 'GROUP_10B_DOWNSIDE_THRESHOLD_DOWNSIDE_BEARISH',
-            'description': f'Switch at {threshold*100:.0f}% downside to lowest downside'
-        })
-
-    # =========================================================================
-    # GROUP 11: Cost Analysis (Time-Based) - COST-OPTIMIZED
-    # Count: 4 strategies
-    # =========================================================================
-
-    for freq in REBALANCE_FREQUENCIES:
-        combos.append({
-            'trigger_type': 'rebalance_time_period',
-            'trigger_params': {'frequency': freq},
-            'selection_func_name': 'select_cost_analysis',
-            'group': 'GROUP_11_TIME_COST',
-            'description': f'{freq.title()} rebalance to best cost per day'
-        })
-
-    # =========================================================================
-    # GROUP 12: Cost Analysis (Threshold-Based) - COST-OPTIMIZED
-    # Count: 9 strategies
-    # =========================================================================
-
-    # Remaining cap threshold + cost analysis
-    for threshold in THRESHOLD_LEVELS:
-        combos.append({
-            'trigger_type': 'remaining_cap_threshold',
-            'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_cost_analysis',
-            'group': 'GROUP_12A_CAP_THRESHOLD_COST',
-            'description': f'Switch at {threshold*100:.0f}% remaining cap to best cost'
-        })
-
-    # Cap utilization threshold + cost analysis
-    for threshold in THRESHOLD_LEVELS:
-        combos.append({
-            'trigger_type': 'cap_utilization_threshold',
-            'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_cost_analysis',
-            'group': 'GROUP_12B_UTIL_THRESHOLD_COST',
-            'description': f'Switch at {threshold*100:.0f}% utilization to best cost'
-        })
-
-    # Downside threshold + cost analysis
-    for threshold in THRESHOLD_LEVELS:
-        combos.append({
-            'trigger_type': 'downside_before_buffer_threshold',
-            'trigger_params': {'threshold': threshold},
-            'selection_func_name': 'select_cost_analysis',
-            'group': 'GROUP_12C_DOWNSIDE_THRESHOLD_COST',
-            'description': f'Switch at {threshold*100:.0f}% downside to best cost'
-        })
+    for threshold in THRESHOLD_LEVELS:  # [0.15, 0.50, 0.85]
+        for selection in buffer_selections:
+            combos.append({
+                'trigger_type': 'remaining_buffer_threshold',
+                'trigger_params': {'threshold': threshold},
+                'selection_func_name': selection,
+                'group': 'GROUP_14_BUFFER_THRESHOLD_BEARISH',
+                'description': f'Switch at {threshold * 100:.0f}% buffer to {selection}'
+            })
 
     return combos
-
 
 # Generate all combinations
 COMBO_CONFIGS = generate_combo_configs()
