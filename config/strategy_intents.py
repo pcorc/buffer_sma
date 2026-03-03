@@ -216,6 +216,144 @@ def build_intent_map() -> Dict[Tuple[str, str], str]:
             key = (f'remaining_buffer_threshold|{threshold}', selection)
             intent_map[key] = 'bearish'
 
+    # =========================================================================
+    # GROUP 16: Enhanced Cost Ratio - Time-Based Triggers
+    # Intent: COST_OPTIMIZED
+    # =========================================================================
+
+    # All three regime versions with time-based triggers
+    for freq in ['monthly', 'quarterly', 'semi_annual', 'annual']:
+        # Bullish weighting (Cap-heavy: 0.2, 0.1, 0.7)
+        key = (f'rebalance_time_period|{freq}', 'select_enhanced_cost_ratio_bullish')
+        intent_map[key] = 'cost_optimized'
+
+        # Bearish weighting (DBB/Buffer-heavy: 0.4, 0.4, 0.2)
+        key = (f'rebalance_time_period|{freq}', 'select_enhanced_cost_ratio_bearish')
+        intent_map[key] = 'cost_optimized'
+
+        # Neutral weighting (Equal: 0.333, 0.333, 0.333)
+        key = (f'rebalance_time_period|{freq}', 'select_enhanced_cost_ratio_neutral')
+        intent_map[key] = 'cost_optimized'
+
+    # =========================================================================
+    # GROUP 17: Enhanced Cost Ratio - Cap Utilization Thresholds
+    # Intent: COST_OPTIMIZED
+    # =========================================================================
+
+    for threshold in [0.15, 0.50, 0.75, 0.85, 0.90]:
+        # Bullish weighting
+        key = (f'cap_utilization_threshold|{threshold}', 'select_enhanced_cost_ratio_bullish')
+        intent_map[key] = 'cost_optimized'
+
+        # Bearish weighting
+        key = (f'cap_utilization_threshold|{threshold}', 'select_enhanced_cost_ratio_bearish')
+        intent_map[key] = 'cost_optimized'
+
+        # Neutral weighting
+        key = (f'cap_utilization_threshold|{threshold}', 'select_enhanced_cost_ratio_neutral')
+        intent_map[key] = 'cost_optimized'
+
+    # =========================================================================
+    # GROUP 18: Enhanced Cost Ratio - Remaining Cap Thresholds
+    # Intent: COST_OPTIMIZED
+    # =========================================================================
+
+    for threshold in [0.15, 0.50, 0.75, 0.85, 0.90]:
+        # Bullish weighting
+        key = (f'remaining_cap_threshold|{threshold}', 'select_enhanced_cost_ratio_bullish')
+        intent_map[key] = 'cost_optimized'
+
+        # Bearish weighting
+        key = (f'remaining_cap_threshold|{threshold}', 'select_enhanced_cost_ratio_bearish')
+        intent_map[key] = 'cost_optimized'
+
+        # Neutral weighting
+        key = (f'remaining_cap_threshold|{threshold}', 'select_enhanced_cost_ratio_neutral')
+        intent_map[key] = 'cost_optimized'
+
+        # =========================================================================
+        # GROUP 19: Enhanced Cost Ratio - Extreme Weight Variants (Time-Based)
+        # Intent: COST_OPTIMIZED
+        # =========================================================================
+
+        extreme_ecr_selections = [
+            'select_ecr_pure_cap',
+            'select_ecr_pure_buffer',
+            'select_ecr_pure_dbb',
+            'select_ecr_ultra_cap',
+            'select_ecr_ultra_protection',
+            'select_ecr_dbb_dominant',
+            'select_ecr_buffer_dominant',
+            'select_ecr_no_cap',
+            'select_ecr_no_buffer'
+        ]
+
+        for freq in ['monthly', 'quarterly', 'semi_annual', 'annual']:
+            for selection in extreme_ecr_selections:
+                key = (f'rebalance_time_period|{freq}', selection)
+                intent_map[key] = 'cost_optimized'
+
+        # =========================================================================
+        # GROUP 20: Enhanced Cost Ratio - Extreme Variants (Cap Utilization)
+        # Intent: COST_OPTIMIZED
+        # =========================================================================
+
+        for threshold in [0.50, 0.75, 0.90]:
+            for selection in extreme_ecr_selections:
+                key = (f'cap_utilization_threshold|{threshold}', selection)
+                intent_map[key] = 'cost_optimized'
+
+        return intent_map
+
+    # =========================================================================
+    # GROUP 20: Enhanced Cost Ratio - Component Mechanics Variants
+    # Intent: COST_OPTIMIZED
+    # =========================================================================
+
+    mechanics_variants = [
+        # Buffer scaling
+        'select_ecr_buffer_scale_full',
+        'select_ecr_buffer_scale_low_floor',
+        'select_ecr_buffer_scale_default',
+        'select_ecr_buffer_scale_high_floor',
+        # Time scaling
+        'select_ecr_time_log',
+        'select_ecr_time_linear',
+        'select_ecr_time_sqrt',
+        'select_ecr_time_inverse',
+        'select_ecr_time_none',
+        # DBB scaling
+        'select_ecr_dbb_raw',
+        'select_ecr_dbb_scaled'
+    ]
+
+    for selection in mechanics_variants:
+        # Cap utilization threshold
+        key = (f'cap_utilization_threshold|0.75', selection)
+        intent_map[key] = 'cost_optimized'
+
+        # Time-based
+        key = (f'rebalance_time_period|quarterly', selection)
+        intent_map[key] = 'cost_optimized'
+
+        # Remaining cap (for DBB scaling tests)
+        if 'dbb' in selection:
+            key = (f'remaining_cap_threshold|0.75', selection)
+            intent_map[key] = 'cost_optimized'
+
+    # =========================================================================
+    # GROUP 21: Batch 6D - ECR vs Existing Comparison
+    # =========================================================================
+
+    # ECR V2 with quarterly rebalancing
+    key = ('rebalance_time_period|quarterly', 'select_enhanced_cost_ratio_neutral_v2')
+    intent_map[key] = 'cost_optimized'
+
+    # Compound threshold (cap OR buffer) with most recent launch
+    key = ('cap_or_buffer_utilization_threshold|0.90', 'select_most_recent_launch')
+    intent_map[key] = 'bullish'
+
+
 
     return intent_map
 
@@ -401,10 +539,6 @@ def print_intent_breakdown_by_group():
             intent = STRATEGY_INTENT_MAP[sample_keys[0]]
             print(f"\n{group_name:50s} → {intent.upper()}")
 
-
-# =============================================================================
-# VALIDATION
-# =============================================================================
 
 def validate_intent_map():
     """Validate that all expected combinations are in the intent map."""

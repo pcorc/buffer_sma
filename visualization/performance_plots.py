@@ -412,225 +412,6 @@ def plot_threshold_comparison(
     return filepath
 
 
-def plot_threshold_performance_with_table(
-        summary_df: pd.DataFrame,
-        output_dir: str
-) -> Optional[str]:
-    """
-    Comprehensive threshold analysis with integrated performance table.
-
-    Shows:
-    1. Bar chart of average excess vs BUFR by threshold
-    2. Integrated table with detailed statistics
-    3. Visual ranking highlighting 90% underperformance
-
-    Only relevant for batches testing cap_utilization_threshold.
-
-    Parameters:
-        summary_df: Summary DataFrame with all results
-        output_dir: Directory to save plot
-
-    Returns:
-        Filepath if successful, None otherwise
-    """
-    import ast
-
-    print("\n  Generating: Threshold Performance Analysis with Table...")
-
-    # Extract threshold values
-    def extract_threshold(params_str):
-        try:
-            params_dict = ast.literal_eval(params_str)
-            return params_dict.get('threshold', None)
-        except:
-            return None
-
-    summary_df_copy = summary_df.copy()
-    summary_df_copy['threshold_value'] = summary_df_copy['trigger_params'].apply(extract_threshold)
-
-    # Filter to threshold strategies with correct selection algo
-    threshold_data = summary_df_copy[
-        (summary_df_copy['trigger_type'] == 'cap_utilization_threshold') &
-        (summary_df_copy['selection_algo'] == 'select_most_recent_launch') &
-        (summary_df_copy['threshold_value'].notna())
-        ].copy()
-
-
-    # Calculate statistics by threshold
-    stats_by_threshold = []
-
-    for threshold in sorted(threshold_data['threshold_value'].unique()):
-        thresh_data = threshold_data[threshold_data['threshold_value'] == threshold]
-
-        avg_excess = thresh_data['vs_bufr_excess'].mean()
-        std_excess = thresh_data['vs_bufr_excess'].std()
-        min_excess = thresh_data['vs_bufr_excess'].min()
-        max_excess = thresh_data['vs_bufr_excess'].max()
-        num_beating = (thresh_data['vs_bufr_excess'] > 0).sum()
-        total_months = len(thresh_data)
-
-        stats_by_threshold.append({
-            'threshold': threshold,
-            'avg_excess': avg_excess,
-            'std_excess': std_excess,
-            'min_excess': min_excess,
-            'max_excess': max_excess,
-            'num_beating': num_beating,
-            'total_months': total_months,
-            'pct_beating': (num_beating / total_months * 100) if total_months > 0 else 0
-        })
-
-    stats_df = pd.DataFrame(stats_by_threshold)
-    stats_df = stats_df.sort_values('avg_excess', ascending=False)  # Best to worst
-
-    # Print summary to console
-    print("\n  Threshold Performance Summary:")
-    print("  " + "=" * 70)
-    for _, row in stats_df.iterrows():
-        print(f"  {int(row['threshold'] * 100):3d}% | "
-              f"Avg: {row['avg_excess'] * 100:+6.2f}% | "
-              f"Std: {row['std_excess'] * 100:5.2f}% | "
-              f"Beat BUFR: {row['num_beating']:.0f}/{row['total_months']:.0f} months")
-    print("  " + "=" * 70)
-
-    # Create figure with adjusted layout
-    fig = plt.figure(figsize=(14, 10))
-
-    # Top: Bar chart (70% of figure height)
-    ax_bar = plt.subplot2grid((10, 1), (0, 0), rowspan=6)
-
-    # Bottom: Table (30% of figure height)
-    ax_table = plt.subplot2grid((10, 1), (7, 0), rowspan=3)
-    ax_table.axis('off')
-
-    # =========================================================================
-    # BAR CHART
-    # =========================================================================
-
-    thresholds_pct = [int(t * 100) for t in stats_df['threshold']]
-    avg_excess_pct = stats_df['avg_excess'].values * 100
-
-    # Color coding: highlight 90% as red, best as green
-    colors = []
-    for i, threshold in enumerate(stats_df['threshold']):
-        if i == 0:  # Best performer
-            colors.append('#2E7D32')  # Dark green
-        elif threshold == 0.90:  # 90% threshold
-            colors.append('#D32F2F')  # Red
-        else:
-            colors.append('#1976D2')  # Blue
-
-    bars = ax_bar.bar(range(len(thresholds_pct)), avg_excess_pct,
-                      color=colors, alpha=0.85, edgecolor='black', linewidth=2)
-
-    # Add value labels on bars
-    for bar, val in zip(bars, avg_excess_pct):
-        height = bar.get_height()
-        y_pos = height + 0.15 if height > 0 else height - 0.15
-        va = 'bottom' if height > 0 else 'top'
-
-        ax_bar.text(bar.get_x() + bar.get_width() / 2, y_pos,
-                    f'{val:+.2f}%',
-                    ha='center', va=va, fontsize=12, fontweight='bold')
-
-    # Formatting
-    ax_bar.set_xticks(range(len(thresholds_pct)))
-    ax_bar.set_xticklabels([f'{t}%' for t in thresholds_pct], fontsize=12, fontweight='bold')
-    ax_bar.set_ylabel('Average Excess Return vs BUFR (%)', fontsize=13, fontweight='bold')
-    ax_bar.set_title('Cap Utilization Threshold Performance Analysis (Averaged Across 12 Months)',
-                     fontsize=15, fontweight='bold', pad=20)
-    ax_bar.axhline(y=0, color='black', linestyle='--', linewidth=1.5, alpha=0.5)
-    ax_bar.grid(True, alpha=0.3, axis='y', linestyle=':')
-
-    # Add ranking labels
-    for i, (bar, rank) in enumerate(zip(bars, range(1, len(bars) + 1))):
-        ax_bar.text(bar.get_x() + bar.get_width() / 2, ax_bar.get_ylim()[1] * 0.95,
-                    f'Rank #{rank}',
-                    ha='center', va='top', fontsize=10, fontweight='bold',
-                    color='white' if i == 0 or stats_df.iloc[i]['threshold'] == 0.90 else 'black',
-                    bbox=dict(boxstyle='round,pad=0.3',
-                              facecolor=colors[i],
-                              edgecolor='black',
-                              linewidth=1.5,
-                              alpha=0.9))
-
-    # =========================================================================
-    # PERFORMANCE TABLE
-    # =========================================================================
-
-    # Prepare table data
-    table_data = []
-    table_data.append(['Threshold', 'Avg vs BUFR', 'Std Dev', 'Min', 'Max', 'Months Beat BUFR'])
-
-    for _, row in stats_df.iterrows():
-        table_data.append([
-            f"{int(row['threshold'] * 100)}%",
-            f"{row['avg_excess'] * 100:+.2f}%",
-            f"{row['std_excess'] * 100:.2f}%",
-            f"{row['min_excess'] * 100:+.2f}%",
-            f"{row['max_excess'] * 100:+.2f}%",
-            f"{int(row['num_beating'])}/{int(row['total_months'])}"
-        ])
-
-    # Create table
-    table = ax_table.table(cellText=table_data,
-                           cellLoc='center',
-                           loc='center',
-                           bbox=[0, 0, 1, 1])
-
-    # Style table
-    table.auto_set_font_size(False)
-    table.set_fontsize(10)
-    table.scale(1, 2.5)
-
-    # Header row styling
-    for i in range(len(table_data[0])):
-        cell = table[(0, i)]
-        cell.set_facecolor('#366092')
-        cell.set_text_props(weight='bold', color='white', fontsize=11)
-        cell.set_edgecolor('black')
-        cell.set_linewidth(2)
-
-    # Data row styling
-    for i in range(1, len(table_data)):
-        # Color code by ranking
-        row_color = colors[i - 1]
-        row_alpha = 0.15
-
-        for j in range(len(table_data[i])):
-            cell = table[(i, j)]
-            cell.set_facecolor(row_color)
-            cell.set_alpha(row_alpha)
-            cell.set_edgecolor('black')
-            cell.set_linewidth(1)
-
-            # Bold the avg vs BUFR column (index 1)
-            if j == 1:
-                cell.set_text_props(weight='bold', fontsize=10)
-
-    plt.tight_layout()
-
-    filename = 'threshold_performance_analysis.png'
-    filepath = os.path.join(output_dir, filename)
-    plt.savefig(filepath, dpi=300, bbox_inches='tight')
-    plt.close()
-
-    print(f"    ✓ Saved: {filename}")
-
-    # Also export table as CSV for reference
-    stats_df_export = stats_df.copy()
-    stats_df_export['threshold'] = (stats_df_export['threshold'] * 100).astype(int).astype(str) + '%'
-    stats_df_export['avg_excess'] = (stats_df_export['avg_excess'] * 100).round(2)
-    stats_df_export['std_excess'] = (stats_df_export['std_excess'] * 100).round(2)
-    stats_df_export['min_excess'] = (stats_df_export['min_excess'] * 100).round(2)
-    stats_df_export['max_excess'] = (stats_df_export['max_excess'] * 100).round(2)
-
-    csv_path = os.path.join(output_dir, 'threshold_performance_table.csv')
-    stats_df_export.to_csv(csv_path, index=False)
-    print(f"    ✓ Saved: threshold_performance_table.csv")
-
-    return filepath
-
 
 # =============================================================================
 # PLOT 4: REGIME PERFORMANCE WITH BUFR
@@ -1224,6 +1005,20 @@ def generate_batch_visualizations(
             if filepath:
                 generated_plots['batch7_four_strategies'] = filepath
 
+        if batch_number == 6:
+            # Enhanced Cost Ratio specialized plots
+            filepath = plot_ecr_regime_comparison(summary_df, output_dir)
+            if filepath:
+                generated_plots['ecr_regime_comparison'] = filepath
+
+            filepath = plot_ecr_top_performers(results_list, summary_df, output_dir, top_n=5)
+            if filepath:
+                generated_plots['ecr_top_performers'] = filepath
+
+            filepath = plot_ecr_by_trigger_type(summary_df, output_dir)
+            if filepath:
+                generated_plots['ecr_by_trigger_type'] = filepath
+
         elif batch_number == 0 or _has_threshold_strategies(summary_df):
             # Use original threshold comparison for other batches
             filepath = plot_threshold_comparison(summary_df, output_dir)
@@ -1705,9 +1500,6 @@ def plot_batch_7_four_strategies(
     return filepath
 
 
-# =============================================================================
-# BATCH 8 SPECIALIZED PLOT: Threshold Performance with Table
-# =============================================================================
 
 def plot_threshold_performance_with_table(
         summary_df: pd.DataFrame,
@@ -1732,6 +1524,19 @@ def plot_threshold_performance_with_table(
     """
     import ast
 
+    # Quick check: Skip if this batch doesn't have threshold-based strategies
+    if summary_df.empty:
+        return None
+
+    # Check if strategies have thresholds in trigger_type
+    has_thresholds = False
+    if 'trigger_type' in summary_df.columns:
+        has_thresholds = summary_df['trigger_type'].str.contains('threshold').any()
+
+    if not has_thresholds:
+        print("    ⊘ Skipped: No threshold-based strategies in this batch")
+        return None
+
     print("\n  Generating: Threshold Performance Analysis with Table...")
 
     # Extract threshold values
@@ -1751,6 +1556,7 @@ def plot_threshold_performance_with_table(
         (summary_df_copy['selection_algo'] == 'select_most_recent_launch') &
         (summary_df_copy['threshold_value'].notna())
         ].copy()
+
 
     # Calculate statistics by threshold
     stats_by_threshold = []
@@ -1777,7 +1583,13 @@ def plot_threshold_performance_with_table(
         })
 
     stats_df = pd.DataFrame(stats_by_threshold)
-    stats_df = stats_df.sort_values('avg_excess', ascending=False)  # Best to worst
+
+    # Safety check - if stats_df is empty, return
+    if stats_df.empty:
+        print("    ⊘ Skipped: No threshold statistics could be calculated")
+        return None
+
+    stats_df = stats_df.sort_values('avg_excess', ascending=False)
 
     # Print summary to console
     print("\n  Threshold Performance Summary:")
@@ -1838,17 +1650,17 @@ def plot_threshold_performance_with_table(
     ax_bar.axhline(y=0, color='black', linestyle='--', linewidth=1.5, alpha=0.5)
     ax_bar.grid(True, alpha=0.3, axis='y', linestyle=':')
 
-    # # Add ranking labels
-    # for i, (bar, rank) in enumerate(zip(bars, range(1, len(bars) + 1))):
-    #     ax_bar.text(bar.get_x() + bar.get_width() / 2, ax_bar.get_ylim()[1] * 0.95,
-    #                 f'Rank #{rank}',
-    #                 ha='center', va='top', fontsize=10, fontweight='bold',
-    #                 color='white' if i == 0 or stats_df.iloc[i]['threshold'] == 0.90 else 'black',
-    #                 bbox=dict(boxstyle='round,pad=0.3',
-    #                           facecolor=colors[i],
-    #                           edgecolor='black',
-    #                           linewidth=1.5,
-    #                           alpha=0.9))
+    # Add ranking labels
+    for i, (bar, rank) in enumerate(zip(bars, range(1, len(bars) + 1))):
+        ax_bar.text(bar.get_x() + bar.get_width() / 2, ax_bar.get_ylim()[1] * 0.95,
+                    f'Rank #{rank}',
+                    ha='center', va='top', fontsize=10, fontweight='bold',
+                    color='white' if i == 0 or stats_df.iloc[i]['threshold'] == 0.90 else 'black',
+                    bbox=dict(boxstyle='round,pad=0.3',
+                              facecolor=colors[i],
+                              edgecolor='black',
+                              linewidth=1.5,
+                              alpha=0.9))
 
     # =========================================================================
     # PERFORMANCE TABLE
@@ -2489,3 +2301,358 @@ def format_selection_name(selection_algo: str) -> str:
         # ... etc
     }
     return selection_map.get(selection_algo, selection_algo)
+
+
+"""
+Enhanced Cost Ratio Visualization Functions
+
+Add these functions to visualization/performance_plots.py
+
+These create specialized plots for Enhanced Cost Ratio batch testing:
+1. ECR Score Comparison - Compare bullish/bearish/neutral weighting performance
+2. ECR Component Analysis - Show which components (DBB/Buffer/Cap) matter most
+3. ECR Top Performers - Normalized NAV of best ECR strategies
+"""
+
+
+def plot_ecr_regime_comparison(
+        summary_df: pd.DataFrame,
+        output_dir: str
+) -> Optional[str]:
+    """
+    Compare performance of Enhanced Cost Ratio across three regime weightings.
+
+    Creates bar chart showing:
+    - Bullish (Cap-heavy) vs Bearish (Protection-heavy) vs Neutral (Balanced)
+    - Average return, Sharpe ratio, max drawdown for each
+    """
+    print("\n  Generating: ECR Regime Weighting Comparison...")
+
+    if summary_df.empty:
+        print("    ⊘ Skipped: No data")
+        return None
+
+    # Filter to ECR strategies only
+    ecr_mask = summary_df['selection_algo'].str.contains('enhanced_cost_ratio', na=False)
+    ecr_df = summary_df[ecr_mask].copy()
+
+    if ecr_df.empty:
+        print("    ⊘ Skipped: No Enhanced Cost Ratio strategies found")
+        return None
+
+    # Extract regime type from selection function name
+    def extract_regime(selection_algo):
+        if 'bullish' in selection_algo:
+            return 'Bullish'
+        elif 'bearish' in selection_algo:
+            return 'Bearish'
+        elif 'neutral' in selection_algo:
+            return 'Neutral'
+        return 'Unknown'
+
+    ecr_df['ecr_regime'] = ecr_df['selection_algo'].apply(extract_regime)
+
+    # Calculate averages by regime
+    regime_stats = ecr_df.groupby('ecr_regime').agg({
+        'strategy_return': 'mean',
+        'strategy_sharpe': 'mean',
+        'strategy_max_dd': 'mean',
+        'vs_bufr_excess': 'mean'
+    }).reset_index()
+
+    # Sort by Sharpe ratio
+    regime_stats = regime_stats.sort_values('strategy_sharpe', ascending=False)
+
+    # Create figure with 2x2 subplots
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+    fig.suptitle('Enhanced Cost Ratio Performance by Trigger Type',
+                 fontsize=16, fontweight='bold', y=0.98)
+
+    colors = {
+        'Bullish': '#2E7D32',
+        'Bearish': '#C62828',
+        'Neutral': '#1565C0'
+    }
+
+    bar_colors = [colors.get(regime, '#757575') for regime in regime_stats['ecr_regime']]
+    x_pos = range(len(regime_stats))
+    labels = regime_stats['ecr_regime'].tolist()
+
+    # Subplot 1: Average Return
+    ax1 = axes[0, 0]
+    returns_pct = regime_stats['strategy_return'].values * 100
+    bars1 = ax1.bar(x_pos, returns_pct, color=bar_colors, alpha=0.85, edgecolor='black', linewidth=2)
+    ax1.set_title('Average Return', fontsize=13, fontweight='bold')
+    ax1.set_ylabel('Return (%)', fontsize=11)
+    ax1.set_xticks(x_pos)
+    ax1.set_xticklabels(labels, fontsize=11, fontweight='bold')
+    ax1.axhline(y=0, color='black', linestyle='--', linewidth=1)
+    ax1.grid(axis='y', alpha=0.3)
+
+    for bar, val in zip(bars1, returns_pct):
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width() / 2, height,
+                 f'{val:.1f}%', ha='center', va='bottom' if height > 0 else 'top',
+                 fontsize=11, fontweight='bold')
+
+    # Subplot 2: Sharpe Ratio
+    ax2 = axes[0, 1]
+    sharpes = regime_stats['strategy_sharpe'].values
+    bars2 = ax2.bar(x_pos, sharpes, color=bar_colors, alpha=0.85, edgecolor='black', linewidth=2)
+    ax2.set_title('Average Sharpe Ratio', fontsize=13, fontweight='bold')
+    ax2.set_ylabel('Sharpe Ratio', fontsize=11)
+    ax2.set_xticks(x_pos)
+    ax2.set_xticklabels(labels, fontsize=11, fontweight='bold')
+    ax2.axhline(y=0, color='black', linestyle='--', linewidth=1)
+    ax2.grid(axis='y', alpha=0.3)
+
+    for bar, val in zip(bars2, sharpes):
+        height = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width() / 2, height,
+                 f'{val:.2f}', ha='center', va='bottom' if height > 0 else 'top',
+                 fontsize=11, fontweight='bold')
+
+    # Subplot 3: Max Drawdown
+    ax3 = axes[1, 0]
+    drawdowns_pct = regime_stats['strategy_max_dd'].values * 100
+    bars3 = ax3.bar(x_pos, drawdowns_pct, color=bar_colors, alpha=0.85, edgecolor='black', linewidth=2)
+    ax3.set_title('Average Max Drawdown', fontsize=13, fontweight='bold')
+    ax3.set_ylabel('Max Drawdown (%)', fontsize=11)
+    ax3.set_xticks(x_pos)
+    ax3.set_xticklabels(labels, fontsize=11, fontweight='bold')
+    ax3.axhline(y=0, color='black', linestyle='--', linewidth=1)
+    ax3.grid(axis='y', alpha=0.3)
+
+    for bar, val in zip(bars3, drawdowns_pct):
+        height = bar.get_height()
+        ax3.text(bar.get_x() + bar.get_width() / 2, height,
+                 f'{val:.1f}%', ha='center', va='top' if height < 0 else 'bottom',
+                 fontsize=11, fontweight='bold')
+
+    # Subplot 4: Excess vs BUFR
+    ax4 = axes[1, 1]
+    excess_pct = regime_stats['vs_bufr_excess'].values * 100
+    bars4 = ax4.bar(x_pos, excess_pct, color=bar_colors, alpha=0.85, edgecolor='black', linewidth=2)
+    ax4.set_title('Average Excess Return vs BUFR', fontsize=13, fontweight='bold')
+    ax4.set_ylabel('Excess Return (%)', fontsize=11)
+    ax4.set_xticks(x_pos)
+    ax4.set_xticklabels(labels, fontsize=11, fontweight='bold')
+    ax4.axhline(y=0, color='black', linestyle='--', linewidth=1)
+    ax4.grid(axis='y', alpha=0.3)
+
+    for bar, val in zip(bars4, excess_pct):
+        height = bar.get_height()
+        ax4.text(bar.get_x() + bar.get_width() / 2, height,
+                 f'{val:.1f}%', ha='center', va='bottom' if height > 0 else 'top',
+                 fontsize=11, fontweight='bold')
+
+    plt.tight_layout()
+
+    filename = 'ecr_regime_comparison.png'
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"    ✓ Saved: {filename}")
+
+    # Print summary to console
+    print("\n  ECR Regime Performance Summary:")
+    print("  " + "=" * 70)
+    for _, row in regime_stats.iterrows():
+        print(f"  {row['ecr_regime']:10s} | "
+              f"Return: {row['strategy_return'] * 100:+6.2f}% | "
+              f"Sharpe: {row['strategy_sharpe']:5.2f} | "
+              f"vs BUFR: {row['vs_bufr_excess'] * 100:+6.2f}%")
+    print("  " + "=" * 70)
+
+    return filepath
+
+
+def plot_ecr_top_performers(
+        results_list: List[Dict],
+        summary_df: pd.DataFrame,
+        output_dir: str,
+        top_n: int = 5
+) -> Optional[str]:
+    """
+    Plot normalized NAV of top N Enhanced Cost Ratio strategies.
+    """
+    print(f"\n  Generating: ECR Top {top_n} Performers...")
+
+    if summary_df.empty or not results_list:
+        print("    ⊘ Skipped: No data")
+        return None
+
+    # Filter to ECR strategies
+    ecr_mask = summary_df['selection_algo'].str.contains('enhanced_cost_ratio', na=False)
+    ecr_df = summary_df[ecr_mask].copy()
+
+    if ecr_df.empty:
+        print("    ⊘ Skipped: No Enhanced Cost Ratio strategies found")
+        return None
+
+    # Get top N by Sharpe ratio
+    top_strategies = ecr_df.nlargest(top_n, 'strategy_sharpe')
+
+    fig, ax = plt.subplots(figsize=(16, 9))
+
+    colors = ['#2E7D32', '#1565C0', '#F57C00', '#7B1FA2', '#C62828']
+
+    # Plot each top strategy
+    for i, (idx, row) in enumerate(top_strategies.iterrows()):
+        # Find matching result
+        matching_result = None
+        for result in results_list:
+            if (result['launch_month'] == row['launch_month'] and
+                    result['trigger_type'] == row['trigger_type'] and
+                    result['selection_algo'] == row['selection_algo']):
+                matching_result = result
+                break
+
+        if matching_result is None:
+            continue
+
+        daily = matching_result['daily_performance']
+
+        # Extract regime type
+        if 'bullish' in row['selection_algo']:
+            regime = 'Bullish'
+        elif 'bearish' in row['selection_algo']:
+            regime = 'Bearish'
+        else:
+            regime = 'Neutral'
+
+        # Create label
+        trigger_short = row['trigger_type'].replace('_threshold', '').replace('_', ' ').title()
+        label = f"#{i + 1}: {regime} ECR - {trigger_short} ({row['launch_month']})"
+
+        ax.plot(daily['Date'], daily['Strategy_NAV'],
+                color=colors[i % len(colors)], linewidth=2.5, alpha=0.9,
+                label=label, zorder=10 - i)
+
+    # Plot benchmarks
+    if results_list:
+        benchmark = results_list[0]['daily_performance']
+        ax.plot(benchmark['Date'], benchmark['SPY_NAV'],
+                color='#757575', linewidth=2, linestyle='--',
+                alpha=0.7, label='SPY', zorder=5)
+        ax.plot(benchmark['Date'], benchmark['BUFR_NAV'],
+                color='#9E9E9E', linewidth=2, linestyle=':',
+                alpha=0.7, label='BUFR', zorder=5)
+
+    # Formatting
+    ax.set_title(f'Top {top_n} Enhanced Cost Ratio Strategies',
+                 fontsize=16, fontweight='bold')
+    ax.set_xlabel('Date', fontsize=13, fontweight='bold')
+    ax.set_ylabel('NAV (Normalized to 100)', fontsize=13, fontweight='bold')
+    ax.legend(loc='upper left', fontsize=10, framealpha=0.95)
+    ax.grid(True, alpha=0.3, linestyle=':')
+    ax.axhline(y=100, color='black', linestyle='-', linewidth=1, alpha=0.3)
+
+    # Format x-axis
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+    ax.xaxis.set_major_locator(mdates.YearLocator())
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    plt.tight_layout()
+
+    filename = 'ecr_top_performers.png'
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"    ✓ Saved: {filename}")
+    return filepath
+
+
+def plot_ecr_by_trigger_type(
+        summary_df: pd.DataFrame,
+        output_dir: str
+) -> Optional[str]:
+    """
+    Compare ECR performance grouped by trigger type.
+    """
+    print("\n  Generating: ECR Performance by Trigger Type...")
+
+    if summary_df.empty:
+        print("    ⊘ Skipped: No data")
+        return None
+
+    # Filter to ECR strategies
+    ecr_mask = summary_df['selection_algo'].str.contains('enhanced_cost_ratio', na=False)
+    ecr_df = summary_df[ecr_mask].copy()
+
+    if ecr_df.empty:
+        print("    ⊘ Skipped: No Enhanced Cost Ratio strategies found")
+        return None
+
+    # Group by trigger type
+    trigger_stats = ecr_df.groupby('trigger_type').agg({
+        'strategy_sharpe': ['mean', 'std', 'count'],
+        'vs_bufr_excess': 'mean'
+    }).reset_index()
+
+    # Flatten column names
+    trigger_stats.columns = ['trigger_type', 'sharpe_mean', 'sharpe_std', 'count', 'excess_mean']
+
+    # Sort by average Sharpe
+    trigger_stats = trigger_stats.sort_values('sharpe_mean', ascending=False)
+
+    # Create plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    fig.suptitle('Enhanced Cost Ratio: Regime Weighting Performance Comparison',
+                 fontsize=16, fontweight='bold', y=0.98)
+
+    x_pos = range(len(trigger_stats))
+    trigger_labels = [t.replace('_', ' ').title() for t in trigger_stats['trigger_type']]
+
+    # Sharpe ratio with error bars
+    ax1.bar(x_pos, trigger_stats['sharpe_mean'],
+            yerr=trigger_stats['sharpe_std'],
+            color='#1565C0', alpha=0.85, edgecolor='black', linewidth=2,
+            capsize=5, error_kw={'linewidth': 2})
+
+    ax1.set_title('Average Sharpe Ratio (with Std Dev)', fontsize=13, fontweight='bold')
+    ax1.set_ylabel('Sharpe Ratio', fontsize=11)
+    ax1.set_xticks(x_pos)
+    ax1.set_xticklabels(trigger_labels, rotation=45, ha='right', fontsize=10)
+    ax1.axhline(y=0, color='black', linestyle='--', linewidth=1)
+    ax1.grid(axis='y', alpha=0.3)
+
+    # Add value labels and count
+    for i, (bar, mean_val, count_val) in enumerate(zip(ax1.patches,
+                                                       trigger_stats['sharpe_mean'],
+                                                       trigger_stats['count'])):
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width() / 2, height,
+                 f'{mean_val:.2f}\n(n={int(count_val)})',
+                 ha='center', va='bottom',
+                 fontsize=9, fontweight='bold')
+
+    # Excess vs BUFR
+    ax2.bar(x_pos, trigger_stats['excess_mean'] * 100,
+            color='#2E7D32', alpha=0.85, edgecolor='black', linewidth=2)
+
+    ax2.set_title('Average Excess Return vs BUFR', fontsize=13, fontweight='bold')
+    ax2.set_ylabel('Excess Return (%)', fontsize=11)
+    ax2.set_xticks(x_pos)
+    ax2.set_xticklabels(trigger_labels, rotation=45, ha='right', fontsize=10)
+    ax2.axhline(y=0, color='black', linestyle='--', linewidth=1)
+    ax2.grid(axis='y', alpha=0.3)
+
+    for bar, val in zip(ax2.patches, trigger_stats['excess_mean'] * 100):
+        height = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width() / 2, height,
+                 f'{val:+.1f}%',
+                 ha='center', va='bottom' if height > 0 else 'top',
+                 fontsize=10, fontweight='bold')
+
+    plt.tight_layout()
+
+    filename = 'ecr_by_trigger_type.png'
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"    ✓ Saved: {filename}")
+    return filepath

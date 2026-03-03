@@ -156,6 +156,83 @@ def trigger_remaining_buffer_threshold(fund_data_row, threshold):
     # Example: threshold=0.50 means fire when 50% of buffer cushion is used up
     return buffer_depletion > threshold
 
+
+def cap_or_buffer_utilization_threshold(df_universe, current_holdings, current_date, threshold=0.90):
+    """
+    Trigger rotation when EITHER cap OR buffer utilization exceeds threshold.
+
+    This is a compound OR condition:
+    - Triggers if cap is 90%+ utilized (only 10% upside remaining)
+    - OR if buffer is 90%+ utilized (only 10% protection remaining)
+
+    Cap Utilization = (Original Cap - Remaining Cap) / Original Cap
+    Buffer Utilization = (Original Buffer - Remaining Buffer Net) / Original Buffer
+
+    Parameters:
+        df_universe: DataFrame with all available funds
+        current_holdings: DataFrame with current position
+        current_date: Current date
+        threshold: Utilization threshold (default 0.90 = 90%)
+
+    Returns:
+        bool: True if rotation should occur, False otherwise
+    """
+    if current_holdings.empty:
+        return False
+
+    current_fund = current_holdings.iloc[0]
+
+    # =========================================================================
+    # Check Cap Utilization
+    # =========================================================================
+
+    if 'Cap_Utilization' in current_fund:
+        cap_util = current_fund['Cap_Utilization']
+    elif 'Remaining Cap' in current_fund and 'Original_Cap' in current_fund:
+        remaining_cap = current_fund['Remaining Cap']
+        original_cap = current_fund['Original_Cap']
+
+        if original_cap > 0:
+            cap_util = 1.0 - (remaining_cap / 100.0 / original_cap)
+        else:
+            cap_util = 0.0
+    else:
+        cap_util = 0.0
+
+    # =========================================================================
+    # Check Buffer Utilization
+    # =========================================================================
+
+    if 'Remaining Buffer' in current_fund and 'Original_Buffer' in current_fund:
+        remaining_buffer = current_fund['Remaining Buffer']
+        original_buffer = current_fund['Original_Buffer']
+
+        if original_buffer > 0:
+            # Buffer utilization = portion of original buffer consumed
+            buffer_util = max(0.0, (original_buffer - remaining_buffer / 100.0) / original_buffer)
+        else:
+            buffer_util = 0.0
+    else:
+        buffer_util = 0.0
+
+    # =========================================================================
+    # Compound OR Logic
+    # =========================================================================
+
+    should_trigger = (cap_util >= threshold) or (buffer_util >= threshold)
+
+    # Debug logging (optional - comment out in production)
+    if should_trigger:
+        trigger_reason = []
+        if cap_util >= threshold:
+            trigger_reason.append(f"Cap {cap_util * 100:.1f}% utilized")
+        if buffer_util >= threshold:
+            trigger_reason.append(f"Buffer {buffer_util * 100:.1f}% utilized")
+        print(f"  → Trigger: {' OR '.join(trigger_reason)}")
+
+    return should_trigger
+
+
 # Trigger registry for dynamic lookup
 TRIGGER_REGISTRY = {
     'rebalance_time_period': trigger_rebalance_time_period,
@@ -164,6 +241,7 @@ TRIGGER_REGISTRY = {
     'downside_before_buffer_threshold': trigger_downside_before_buffer_threshold,
     'ref_asset_return_threshold': trigger_ref_asset_return_threshold,
     'remaining_buffer_threshold': trigger_remaining_buffer_threshold,
+    'cap_or_buffer_utilization_threshold': cap_or_buffer_utilization_threshold,
 
 }
 
