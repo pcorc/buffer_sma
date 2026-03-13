@@ -37,6 +37,12 @@ for directory in [RESULTS_DIR, REGIME_DIR, TRADE_LOG_DIR]:
 # BACKTEST PARAMETERS
 # =============================================================================
 
+COMMON_START_DATE = None  # Default: use all available data
+COMMON_START_DATE = '2023-01-01'
+# COMMON_START_DATE = '2021-01-15'  # Align to BUFR inception
+# COMMON_START_DATE = '2021-07-01'  # Post-COVID period
+# COMMON_START_DATE = '2022-01-01'  # Recent data only
+
 # Fund series
 SERIES = 'F'  # F-series = 10% buffer
 
@@ -57,8 +63,8 @@ LAUNCH_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
 # =============================================================================
 
 REGIME_WINDOW_MONTHS = 6
-REGIME_BULL_THRESHOLD = 0.03   # 5% gain = bull
-REGIME_BEAR_THRESHOLD = -0.03  # -5% loss = bear  ← More sensitive
+REGIME_BULL_THRESHOLD = 0.10   # 5% gain = bull
+REGIME_BEAR_THRESHOLD = -0.10  # -5% loss = bear  ← More sensitive
 
 # =============================================================================
 # REBALANCING FREQUENCIES
@@ -149,10 +155,6 @@ def print_config_summary():
     total_combos = len(COMBO_CONFIGS)
     total_sims = total_combos * len(LAUNCH_MONTHS)
 
-    print(f"\nTotal strategy combinations: {total_combos}")
-    print(f"Launch months: {len(LAUNCH_MONTHS)}")
-    print(f"Total simulations: {total_sims}")
-
     # Group counts
     from collections import defaultdict
     group_counts = defaultdict(int)
@@ -161,9 +163,6 @@ def print_config_summary():
         group = combo['group']
         group_counts[group] += 1
 
-    print("\n" + "-" * 80)
-    print("BREAKDOWN BY GROUP:")
-    print("-" * 80)
 
     group_order = [
         'GROUP_1_TIME_NEUTRAL',

@@ -46,6 +46,14 @@ sys.path.insert(0, project_root)
 
 # TESTER
 
+def get_first_trading_day_of_month(df, year, month):
+    """Find first available trading date in a specific month."""
+    mask = (df['Date'].dt.year == year) & (df['Date'].dt.month == month)
+    available = df[mask]['Date'].sort_values()
+
+    if len(available) > 0:
+        return available.iloc[0]
+    return None
 
 def extract_and_export_daily_nav(results_list, output_dir, batch_number):
     """
@@ -1589,8 +1597,11 @@ def get_batch_6d_configs():
     configs = []
 
     # Test all 3 launch months for robustness
-    launch_months = [['JAN'], ['MAR'], ['SEP']]
-
+    launch_months = [
+        ['JAN'], ['FEB'], ['MAR'], ['APR'],
+        # ['MAY'], ['JUN'], ['JUL'], ['AUG'],
+        # ['SEP'], ['OCT'], ['NOV'], ['DEC']
+    ]
     # ECR weight scenarios to test
     ecr_variants = [
         ('select_ecr_v2_equal_normalized', 'Equal (0.33/0.33/0.33)'),
@@ -1723,6 +1734,25 @@ def main():
     # Preprocess
     print("Preprocessing...")
     df_enriched = preprocess_fund_data(df_raw, roll_dates_dict)
+
+    # START DATE OVERRIDE
+    if hasattr(settings, 'COMMON_START_DATE') and settings.COMMON_START_DATE:
+        target_date = pd.to_datetime(settings.COMMON_START_DATE)
+
+        # Find first trading day in target month
+        actual_start_date = get_first_trading_day_of_month(
+            df_enriched,
+            target_date.year,
+            target_date.month
+        )
+
+        if actual_start_date:
+            df_enriched = df_enriched[df_enriched['Date'] >= actual_start_date].copy()
+            df_benchmarks = df_benchmarks[df_benchmarks['Date'] >= actual_start_date].copy()
+        else:
+            df_enriched = df_enriched[df_enriched['Date'] >= target_date].copy()
+            df_benchmarks = df_benchmarks[df_benchmarks['Date'] >= target_date].copy()
+
 
     # Classify regimes
     print("Classifying regimes...")
