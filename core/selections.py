@@ -5,11 +5,190 @@ Selection functions for determining WHAT fund to switch to.
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
+from backtesting.regime_adaptive import select_ecr_v2_regime_adaptive_normalized
+from config import settings
 
 
-# Add these after your existing functions, before SELECTION_REGISTRY
+class RebalanceScoringTracker:
+    """
+    Tracks detailed scoring information at each rebalance event.
+    """
 
-def select_remaining_cap(df_universe, current_date, series='F'):
+    def __init__(self):
+        self.rebalance_records = []
+
+    def record_rebalance(self, date, month, weight_config, snapshot_scores, selected_fund):
+        """
+        Record scoring details for one rebalance event.
+
+        Parameters:
+            date: Rebalance date
+            month: Launch month (e.g., 'JAN')
+            weight_config: Tuple like ('111', 'Equal weights')
+            snapshot_scores: List of dicts with fund scores
+            selected_fund: The fund that was selected
+        """
+        weight_code, weight_desc = weight_config
+
+        for fund_score in snapshot_scores:
+            self.rebalance_records.append({
+                'Date': date,
+                'Month': month,
+                'Weight_Config': f"{weight_code[0]},{weight_code[1]},{weight_code[2]}",
+                'Weight_Description': weight_desc,
+                'Fund': fund_score['fund'],
+                'DBB_Score': fund_score.get('dbb_score', np.nan),
+                'Buffer_Integrity': fund_score.get('buffer_integrity', np.nan),
+                'Cap_Integrity': fund_score.get('cap_integrity', np.nan),
+                'Time_Scaling': fund_score.get('time_scaling', np.nan),
+                'Composite_Score': fund_score.get('composite_score', np.nan),
+                'Selected': fund_score['fund'] == selected_fund,
+                # Raw metrics
+                'Cap_Utilization': fund_score.get('cap_utilization', np.nan),
+                'Remaining_Cap_Pct': fund_score.get('remaining_cap_pct', np.nan),
+                'DBB_Pct': fund_score.get('dbb_pct', np.nan),
+                'Remaining_Buffer': fund_score.get('remaining_buffer', np.nan),
+                'Original_Buffer': fund_score.get('original_buffer', np.nan),
+                'Remaining_Days': fund_score.get('remaining_days', np.nan),
+                'Total_Days': fund_score.get('total_days', np.nan),
+            })
+
+    def export_to_excel(self, output_dir, batch_number):
+        """Export all rebalance records to Excel with multiple views."""
+        if not self.rebalance_records:
+            print("⚠️  No rebalance records to export")
+            return
+
+        df = pd.DataFrame(self.rebalance_records)
+
+        output_path = Path(output_dir) / f'batch_{batch_number}_rebalance_scoring.xlsx'
+
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            # Sheet 1: All Records (master data)
+            df.to_excel(writer, sheet_name='All Rebalances', index=False)
+
+            # Sheet 2: Selected Funds Only
+            df_selected = df[df['Selected'] == True].copy()
+            df_selected.to_excel(writer, sheet_name='Selected Funds', index=False)
+
+            # Sheet 3: Pivot - Composite Scores by Date/Weight
+            pivot_composite = df.pivot_table(
+                index=['Date', 'Fund'],
+                columns='Weight_Config',
+                values='Composite_Score',
+                aggfunc='first'
+            )
+            pivot_composite.to_excel(writer, sheet_name='Scores by Weight')
+
+            # Sheet 4: Summary Stats by Weight Config
+            summary = df.groupby(['Weight_Config', 'Weight_Description']).agg({
+                'Composite_Score': ['mean', 'std', 'min', 'max'],
+                'Date': 'count'
+            }).round(4)
+            summary.columns = ['Avg_Score', 'StdDev', 'Min_Score', 'Max_Score', 'N_Rebalances']
+            summary.to_excel(writer, sheet_name='Summary by Weight')
+
+            # Sheet 5: Component Score Correlations
+            component_cols = ['DBB_Score', 'Buffer_Integrity', 'Cap_Integrity', 'Time_Scaling']
+            if all(col in df.columns for col in component_cols):
+                corr = df[component_cols + ['Composite_Score']].corr().round(3)
+                corr.to_excel(writer, sheet_name='Component Correlations')
+
+
+def calculate_ecr_scores_with_tracking(df_snapshot, current_date, series, w_dbb, w_buffer, w_cap):
+    """
+    Calculate ECR scores and return both the selected fund AND detailed scoring.
+
+    This is a modified version of _select_highest_new_ecr_core that returns
+    full scoring details for tracking.
+
+    Returns:
+        selected_fund: The ticker of the selected fund
+        snapshot_scores: List of dicts with all fund scores
+    """
+    available = df_snapshot[
+        (df_snapshot['Date'] == current_date) &
+        (df_snapshot['Series'] == series)
+        ].copy()
+
+    if available.empty:
+        return None, []
+
+    snapshot_scores = []
+
+    for _, row in available.iterrows():
+        # Raw metrics
+        cap_util = row.get('Cap_Utilization', np.nan)
+        remaining_cap_pct = row.get('Remaining_Cap_Pct', np.nan)
+        dbb_pct = row.get('Downside_Before_Buffer_Pct', np.nan)
+        remaining_buffer = row.get('Remaining_Buffer', np.nan)
+        original_buffer = row.get('Original_Buffer', np.nan)
+        remaining_days = row.get('Remaining_Outcome_Days', np.nan)
+        total_days = row.get('Total_Outcome_Days', 365)
+
+        # Component 1: DBB Score (exponential penalty)
+        if pd.notna(dbb_pct):
+            dbb_score = np.exp(dbb_pct * 5)  # Exponential penalty for buffer proximity
+        else:
+            dbb_score = 0
+
+        # Component 2: Buffer Integrity (incorporates distance to buffer)
+        if pd.notna(remaining_buffer) and pd.notna(original_buffer) and pd.notna(dbb_pct):
+            if original_buffer > 0:
+                buffer_integrity = max(0, (remaining_buffer + dbb_pct)) / original_buffer
+            else:
+                buffer_integrity = 0
+        else:
+            buffer_integrity = 0
+
+        # Component 3: Cap Integrity (capped at 1.0)
+        if pd.notna(cap_util):
+            cap_integrity = min(cap_util, 1.0)
+        else:
+            cap_integrity = 0
+
+        # Component 4: Time Scaling (unchanged)
+        if pd.notna(remaining_days) and remaining_days > 0:
+            time_scaling = 1 - np.log(remaining_days / 365)
+        else:
+            time_scaling = 0
+
+        # Composite Score
+        composite = (
+                w_dbb * dbb_score +
+                w_buffer * buffer_integrity +
+                w_cap * cap_integrity +
+                time_scaling
+        )
+
+        snapshot_scores.append({
+            'fund': row['Ticker'],
+            'dbb_score': dbb_score,
+            'buffer_integrity': buffer_integrity,
+            'cap_integrity': cap_integrity,
+            'time_scaling': time_scaling,
+            'composite_score': composite,
+            # Raw metrics for reference
+            'cap_utilization': cap_util,
+            'remaining_cap_pct': remaining_cap_pct,
+            'dbb_pct': dbb_pct,
+            'remaining_buffer': remaining_buffer,
+            'original_buffer': original_buffer,
+            'remaining_days': remaining_days,
+            'total_days': total_days,
+        })
+
+    # Select fund with highest composite score
+    if snapshot_scores:
+        selected = max(snapshot_scores, key=lambda x: x['composite_score'])
+        selected_fund = selected['fund']
+    else:
+        selected_fund = None
+
+    return selected_fund, snapshot_scores
+
+
+def select_remaining_cap(df_universe, current_date, series='F', df_regimes=None):
     """
     Legacy alias for select_remaining_cap_highest.
     Selects fund with highest remaining cap (most upside potential).
@@ -17,7 +196,7 @@ def select_remaining_cap(df_universe, current_date, series='F'):
     return select_remaining_cap_highest(df_universe, current_date, series)
 
 
-def select_cap_utilization(df_universe, current_date, series='F'):
+def select_cap_utilization(df_universe, current_date, series='F', df_regimes=None):
     """
     Legacy alias for select_cap_utilization_lowest.
     Selects fund with lowest cap utilization (most cap remaining).
@@ -25,31 +204,48 @@ def select_cap_utilization(df_universe, current_date, series='F'):
     return select_cap_utilization_lowest(df_universe, current_date, series)
 
 
-def select_most_recent_launch(df_universe, current_date, series='F'):
+
+def select_most_recent_launch(df_universe, current_date, series='F', df_regimes=None, **kwargs):
     """
-    Select the fund with the most recent roll date.
+    Select the most recently launched fund.
 
-    Parameters:
-      df_universe: DataFrame with all funds on current date
-      current_date: Current date
-      series: Fund series
+    This is the baseline strategy for comparison.
 
-    Returns:
-      String: Fund ticker
+    Parameters
+    ----------
+    df_universe : DataFrame
+        Available funds at current date
+    current_date : datetime
+        Current backtest date
+    series : str
+        Fund series (default 'F')
+    df_regimes : DataFrame, optional
+        Regime data (not used, for API compatibility)
+    **kwargs : dict
+        Additional arguments (ignored, for API compatibility)
+
+    Returns
+    -------
+    str or None
+        Fund identifier with most recent roll date
     """
     if df_universe.empty:
         return None
 
-    valid_funds = df_universe[df_universe['Roll_Date'] <= current_date].copy()
+    df_series = df_universe[df_universe['Fund'].str.startswith(series)].copy()
 
-    if valid_funds.empty:
-        return df_universe.loc[df_universe['Remaining Outcome Days'].idxmax(), 'Fund']
+    if df_series.empty:
+        return None
 
-    most_recent_idx = valid_funds['Roll_Date'].idxmax()
-    return valid_funds.loc[most_recent_idx, 'Fund']
+    # Get most recent launch
+    if 'Roll_Date' in df_series.columns:
+        most_recent = df_series.loc[df_series['Roll_Date'].idxmax()]
+    else:
+        most_recent = df_series.iloc[0]
 
+    return most_recent['Fund']
 
-def select_remaining_cap_highest(df_universe, current_date, series='F'):
+def select_remaining_cap_highest(df_universe, current_date, series='F', df_regimes=None):
     """
     Select the fund with the HIGHEST remaining cap (bullish).
 
@@ -80,7 +276,7 @@ def select_remaining_cap_highest(df_universe, current_date, series='F'):
     return max_cap_funds.iloc[0]['Fund']
 
 
-def select_remaining_cap_lowest(df_universe, current_date, series='F'):
+def select_remaining_cap_lowest(df_universe, current_date, series='F', df_regimes=None):
     """
     Select the fund with the LOWEST remaining cap (bearish/conservative).
 
@@ -111,7 +307,7 @@ def select_remaining_cap_lowest(df_universe, current_date, series='F'):
     return min_cap_funds.iloc[0]['Fund']
 
 
-def select_downside_buffer_highest(df_universe, current_date, series='F'):
+def select_downside_buffer_highest(df_universe, current_date, series='F', df_regimes=None):
     """
     Select the fund with the HIGHEST downside before buffer (bullish).
 
@@ -198,7 +394,7 @@ def select_downside_buffer_lowest(df_universe, current_date, series='F'):
     return min_downside_funds.iloc[0]['Fund']
 
 
-def select_cap_utilization_lowest(df_universe, current_date, series='F'):
+def select_cap_utilization_lowest(df_universe, current_date, series='F', df_regimes=None):
     """
     Select the fund with the LOWEST cap utilization (bullish).
 
@@ -239,7 +435,7 @@ def select_cap_utilization_lowest(df_universe, current_date, series='F'):
     return min_util_funds.iloc[0]['Fund']
 
 
-def select_cap_utilization_highest(df_universe, current_date, series='F'):
+def select_cap_utilization_highest(df_universe, current_date, series='F', df_regimes=None):
     """
     Select the fund with the HIGHEST cap utilization (bearish/conservative).
 
@@ -280,7 +476,7 @@ def select_cap_utilization_highest(df_universe, current_date, series='F'):
     return max_util_funds.iloc[0]['Fund']
 
 
-def select_highest_outcome_and_cap(df_universe, current_date, series='F'):
+def select_highest_outcome_and_cap(df_universe, current_date, series='F', df_regimes=None):
     """
     Select fund with highest combined Remaining Outcome Days + Remaining Cap.
 
@@ -316,7 +512,7 @@ def select_highest_outcome_and_cap(df_universe, current_date, series='F'):
     return max_score_funds.iloc[0]['Fund']
 
 
-def select_cost_analysis(df_universe, current_date, series='F'):
+def select_cost_analysis(df_universe, current_date, series='F', df_regimes=None):
     """
     Select fund with lowest cost per day of protection.
 
@@ -362,7 +558,7 @@ def select_cost_analysis(df_universe, current_date, series='F'):
     return min_cost_funds.iloc[0]['Fund']
 
 
-def select_remaining_buffer_lowest(df_universe, current_date, series='F'):
+def select_remaining_buffer_lowest(df_universe, current_date, series='F', df_regimes=None):
     """
     Select fund with LOWEST remaining buffer (bearish/defensive).
 
@@ -415,7 +611,7 @@ def select_remaining_buffer_lowest(df_universe, current_date, series='F'):
     return min_buffer_funds.iloc[0]['Fund']
 
 
-def select_enhanced_cost_ratio_bullish(df_universe, current_date, series='F'):
+def select_enhanced_cost_ratio_bullish(df_universe, current_date, series='F', df_regimes=None):
     """
     Select fund with highest Enhanced Cost Ratio (Bullish weighting).
 
@@ -524,7 +720,7 @@ def select_enhanced_cost_ratio_bullish(df_universe, current_date, series='F'):
     return max_ecr_funds.iloc[0]['Fund']
 
 
-def select_enhanced_cost_ratio_bearish(df_universe, current_date, series='F'):
+def select_enhanced_cost_ratio_bearish(df_universe, current_date, series='F', df_regimes=None):
     """
     Select fund with highest Enhanced Cost Ratio (Bearish weighting).
 
@@ -628,7 +824,7 @@ def select_enhanced_cost_ratio_bearish(df_universe, current_date, series='F'):
     return max_ecr_funds.iloc[0]['Fund']
 
 
-def select_enhanced_cost_ratio_neutral(df_universe, current_date, series='F'):
+def select_enhanced_cost_ratio_neutral(df_universe, current_date, series='F', df_regimes=None):
     """
     Select fund with highest Enhanced Cost Ratio (Neutral weighting).
 
@@ -837,19 +1033,19 @@ def _enhanced_cost_ratio_core(
 # PURE COMPONENT TESTS (100% focus on one component)
 # =============================================================================
 
-def select_ecr_pure_cap(df_universe, current_date, series='F'):
+def select_ecr_pure_cap(df_universe, current_date, series='F', df_regimes=None):
     """100% Cap focus - ignore DBB and Buffer entirely."""
     return _enhanced_cost_ratio_core(df_universe, current_date, series,
                                      w_dbb=0.0, w_buffer=0.0, w_cap=1.0)
 
 
-def select_ecr_pure_buffer(df_universe, current_date, series='F'):
+def select_ecr_pure_buffer(df_universe, current_date, series='F', df_regimes=None):
     """100% Buffer Integrity focus - ignore DBB and Cap entirely."""
     return _enhanced_cost_ratio_core(df_universe, current_date, series,
                                      w_dbb=0.0, w_buffer=1.0, w_cap=0.0)
 
 
-def select_ecr_pure_dbb(df_universe, current_date, series='F'):
+def select_ecr_pure_dbb(df_universe, current_date, series='F', df_regimes=None):
     """100% DBB focus - ignore Buffer and Cap entirely."""
     return _enhanced_cost_ratio_core(df_universe, current_date, series,
                                      w_dbb=1.0, w_buffer=0.0, w_cap=0.0)
@@ -859,25 +1055,25 @@ def select_ecr_pure_dbb(df_universe, current_date, series='F'):
 # EXTREME SKEWS (80-90% focus on one component)
 # =============================================================================
 
-def select_ecr_ultra_cap(df_universe, current_date, series='F'):
+def select_ecr_ultra_cap(df_universe, current_date, series='F', df_regimes=None):
     """Ultra Cap-Heavy: 90% cap, 5% each for DBB and Buffer."""
     return _enhanced_cost_ratio_core(df_universe, current_date, series,
                                      w_dbb=0.05, w_buffer=0.05, w_cap=0.90)
 
 
-def select_ecr_ultra_protection(df_universe, current_date, series='F'):
+def select_ecr_ultra_protection(df_universe, current_date, series='F', df_regimes=None):
     """Ultra Protection: 45% DBB, 45% Buffer, 10% Cap."""
     return _enhanced_cost_ratio_core(df_universe, current_date, series,
                                      w_dbb=0.45, w_buffer=0.45, w_cap=0.10)
 
 
-def select_ecr_dbb_dominant(df_universe, current_date, series='F'):
+def select_ecr_dbb_dominant(df_universe, current_date, series='F', df_regimes=None):
     """DBB Dominant: 80% DBB, 10% each for Buffer and Cap."""
     return _enhanced_cost_ratio_core(df_universe, current_date, series,
                                      w_dbb=0.80, w_buffer=0.10, w_cap=0.10)
 
 
-def select_ecr_buffer_dominant(df_universe, current_date, series='F'):
+def select_ecr_buffer_dominant(df_universe, current_date, series='F', df_regimes=None):
     """Buffer Dominant: 80% Buffer, 10% each for DBB and Cap."""
     return _enhanced_cost_ratio_core(df_universe, current_date, series,
                                      w_dbb=0.10, w_buffer=0.80, w_cap=0.10)
@@ -887,13 +1083,13 @@ def select_ecr_buffer_dominant(df_universe, current_date, series='F'):
 # ABLATION TESTS (test by exclusion - remove one component)
 # =============================================================================
 
-def select_ecr_no_cap(df_universe, current_date, series='F'):
+def select_ecr_no_cap(df_universe, current_date, series='F', df_regimes=None):
     """No Cap Component: 50% DBB, 50% Buffer, 0% Cap."""
     return _enhanced_cost_ratio_core(df_universe, current_date, series,
                                      w_dbb=0.50, w_buffer=0.50, w_cap=0.0)
 
 
-def select_ecr_no_buffer(df_universe, current_date, series='F'):
+def select_ecr_no_buffer(df_universe, current_date, series='F', df_regimes=None):
     """No Buffer Component: 50% DBB, 0% Buffer, 50% Cap."""
     return _enhanced_cost_ratio_core(df_universe, current_date, series,
                                      w_dbb=0.50, w_buffer=0.0, w_cap=0.50)
@@ -1057,7 +1253,7 @@ def _ecr_mechanics_core(
 # GROUP 1: BUFFER INTEGRITY SCALING VARIANTS (4 functions)
 # =============================================================================
 
-def select_ecr_buffer_scale_full(df_universe, current_date, series='F'):
+def select_ecr_buffer_scale_full(df_universe, current_date, series='F', df_regimes=None):
     """
     ECR with Buffer Integrity scaled to [0.0, 1.0] (full range).
 
@@ -1070,7 +1266,7 @@ def select_ecr_buffer_scale_full(df_universe, current_date, series='F'):
                                dbb_scaled=False)
 
 
-def select_ecr_buffer_scale_low_floor(df_universe, current_date, series='F'):
+def select_ecr_buffer_scale_low_floor(df_universe, current_date, series='F', df_regimes=None):
     """
     ECR with Buffer Integrity scaled to [0.3, 1.0] (lower floor than default).
 
@@ -1082,7 +1278,7 @@ def select_ecr_buffer_scale_low_floor(df_universe, current_date, series='F'):
                                dbb_scaled=False)
 
 
-def select_ecr_buffer_scale_default(df_universe, current_date, series='F'):
+def select_ecr_buffer_scale_default(df_universe, current_date, series='F', df_regimes=None):
     """
     ECR with Buffer Integrity scaled to [0.5, 1.0] (current default).
 
@@ -1094,7 +1290,7 @@ def select_ecr_buffer_scale_default(df_universe, current_date, series='F'):
                                dbb_scaled=False)
 
 
-def select_ecr_buffer_scale_high_floor(df_universe, current_date, series='F'):
+def select_ecr_buffer_scale_high_floor(df_universe, current_date, series='F', df_regimes=None):
     """
     ECR with Buffer Integrity scaled to [0.7, 1.0] (higher floor - less penalty).
 
@@ -1111,7 +1307,7 @@ def select_ecr_buffer_scale_high_floor(df_universe, current_date, series='F'):
 # GROUP 2: TIME SCALING METHOD VARIANTS (5 functions)
 # =============================================================================
 
-def select_ecr_time_log(df_universe, current_date, series='F'):
+def select_ecr_time_log(df_universe, current_date, series='F', df_regimes=None):
     """
     ECR with Logarithmic time scaling: 1 - ln(days_remaining / original_days).
 
@@ -1124,7 +1320,7 @@ def select_ecr_time_log(df_universe, current_date, series='F'):
                                dbb_scaled=False)
 
 
-def select_ecr_time_linear(df_universe, current_date, series='F'):
+def select_ecr_time_linear(df_universe, current_date, series='F', df_regimes=None):
     """
     ECR with Linear time scaling: days_remaining / original_days.
 
@@ -1137,7 +1333,7 @@ def select_ecr_time_linear(df_universe, current_date, series='F'):
                                dbb_scaled=False)
 
 
-def select_ecr_time_sqrt(df_universe, current_date, series='F'):
+def select_ecr_time_sqrt(df_universe, current_date, series='F', df_regimes=None):
     """
     ECR with Square Root time scaling: sqrt(days_remaining / original_days).
 
@@ -1150,7 +1346,7 @@ def select_ecr_time_sqrt(df_universe, current_date, series='F'):
                                dbb_scaled=False)
 
 
-def select_ecr_time_inverse(df_universe, current_date, series='F'):
+def select_ecr_time_inverse(df_universe, current_date, series='F', df_regimes=None):
     """
     ECR with Inverse Linear time scaling: 1 - (days_remaining / original_days).
 
@@ -1164,7 +1360,7 @@ def select_ecr_time_inverse(df_universe, current_date, series='F'):
                                dbb_scaled=False)
 
 
-def select_ecr_time_none(df_universe, current_date, series='F'):
+def select_ecr_time_none(df_universe, current_date, series='F', df_regimes=None):
     """
     ECR with NO time scaling: Time_Factor = 1.0 (constant).
 
@@ -1181,7 +1377,7 @@ def select_ecr_time_none(df_universe, current_date, series='F'):
 # GROUP 3: DBB SCALING VARIANTS (2 functions)
 # =============================================================================
 
-def select_ecr_dbb_raw(df_universe, current_date, series='F'):
+def select_ecr_dbb_raw(df_universe, current_date, series='F', df_regimes=None):
     """
     ECR with Raw DBB Score: 1 + (DBB_decimal).
 
@@ -1194,7 +1390,7 @@ def select_ecr_dbb_raw(df_universe, current_date, series='F'):
                                dbb_scaled=False)
 
 
-def select_ecr_dbb_scaled(df_universe, current_date, series='F'):
+def select_ecr_dbb_scaled(df_universe, current_date, series='F', df_regimes=None):
     """
     ECR with Scaled DBB Score: MinMaxScaler [0.5, 1.0] like Buffer Integrity.
 
@@ -1207,7 +1403,7 @@ def select_ecr_dbb_scaled(df_universe, current_date, series='F'):
                                dbb_scaled=True)
 
 
-def select_enhanced_cost_ratio_neutral_v2(df_universe, current_date, series='F'):
+def select_enhanced_cost_ratio_neutral_v2(df_universe, current_date, series='F', df_regimes=None):
     """
     Enhanced Cost Ratio with updated buffer integrity logic (V2).
 
@@ -1476,31 +1672,31 @@ def _select_ecr_v2_core(df_universe, current_date, series, w_dbb, w_buffer, w_ca
 # WRAPPER FUNCTIONS FOR EACH WEIGHT SCENARIO
 # =============================================================================
 
-def select_ecr_v2_equal(df_universe, current_date, series='F'):
+def select_ecr_v2_equal(df_universe, current_date, series='F', df_regimes=None):
     """ECR V2: Equal weights (0.333, 0.333, 0.333)"""
     return _select_ecr_v2_core(df_universe, current_date, series,
                                w_dbb=0.333, w_buffer=0.333, w_cap=0.333)
 
 
-def select_ecr_v2_cap_balanced(df_universe, current_date, series='F'):
+def select_ecr_v2_cap_balanced(df_universe, current_date, series='F', df_regimes=None):
     """ECR V2: Cap-focused balanced (0.15, 0.35, 0.50)"""
     return _select_ecr_v2_core(df_universe, current_date, series,
                                w_dbb=0.15, w_buffer=0.35, w_cap=0.50)
 
 
-def select_ecr_v2_cap_moderate(df_universe, current_date, series='F'):
+def select_ecr_v2_cap_moderate(df_universe, current_date, series='F', df_regimes=None):
     """ECR V2: Cap-focused moderate (0.25, 0.25, 0.50)"""
     return _select_ecr_v2_core(df_universe, current_date, series,
                                w_dbb=0.25, w_buffer=0.25, w_cap=0.50)
 
 
-def select_ecr_v2_cap_dominant(df_universe, current_date, series='F'):
+def select_ecr_v2_cap_dominant(df_universe, current_date, series='F', df_regimes=None):
     """ECR V2: Cap-dominant (0.15, 0.15, 0.70)"""
     return _select_ecr_v2_core(df_universe, current_date, series,
                                w_dbb=0.15, w_buffer=0.15, w_cap=0.70)
 
 
-def select_ecr_v2_protection(df_universe, current_date, series='F'):
+def select_ecr_v2_protection(df_universe, current_date, series='F', df_regimes=None):
     """ECR V2: Protection-focused (0.40, 0.40, 0.20)"""
     return _select_ecr_v2_core(df_universe, current_date, series,
                                w_dbb=0.40, w_buffer=0.40, w_cap=0.20)
@@ -1639,36 +1835,187 @@ def _select_ecr_v2_normalized_core(df_universe, current_date, series, w_dbb, w_b
     return max_ecr_funds.iloc[0]['Fund']
 
 
-def select_ecr_v2_equal_normalized(df_universe, current_date, series='F'):
+def select_ecr_v2_equal_normalized(df_universe, current_date, series='F', df_regimes=None):
     """ECR V2 Normalized: Equal weights (0.333, 0.333, 0.333)"""
     return _select_ecr_v2_normalized_core(df_universe, current_date, series,
                                           w_dbb=0.333, w_buffer=0.333, w_cap=0.333)
 
 
-def select_ecr_v2_cap_balanced_normalized(df_universe, current_date, series='F'):
+def select_ecr_v2_cap_balanced_normalized(df_universe, current_date, series='F', df_regimes=None):
     """ECR V2 Normalized: Cap-focused balanced (0.15, 0.35, 0.50)"""
     return _select_ecr_v2_normalized_core(df_universe, current_date, series,
                                           w_dbb=0.15, w_buffer=0.35, w_cap=0.50)
 
 
-def select_ecr_v2_cap_moderate_normalized(df_universe, current_date, series='F'):
+def select_ecr_v2_cap_moderate_normalized(df_universe, current_date, series='F', df_regimes=None):
     """ECR V2 Normalized: Cap-focused moderate (0.25, 0.25, 0.50)"""
     return _select_ecr_v2_normalized_core(df_universe, current_date, series,
                                           w_dbb=0.25, w_buffer=0.25, w_cap=0.50)
 
 
-def select_ecr_v2_cap_dominant_normalized(df_universe, current_date, series='F'):
+def select_ecr_v2_cap_dominant_normalized(df_universe, current_date, series='F', df_regimes=None):
     """ECR V2 Normalized: Cap-dominant (0.15, 0.15, 0.70)"""
     return _select_ecr_v2_normalized_core(df_universe, current_date, series,
                                           w_dbb=0.15, w_buffer=0.15, w_cap=0.70)
 
 
-def select_ecr_v2_protection_normalized(df_universe, current_date, series='F'):
+def select_ecr_v2_protection_normalized(df_universe, current_date, series='F', df_regimes=None):
     """ECR V2 Normalized: Protection-focused (0.40, 0.40, 0.20)"""
     return _select_ecr_v2_normalized_core(df_universe, current_date, series,
                                           w_dbb=0.40, w_buffer=0.40, w_cap=0.20)
 
 
+def select_highest_new_ecr_composite_111(df_snapshot, current_date, series, df_regimes=None, tracker=None, month=None, **kwargs):
+    """Equal weights (1,1,1)"""
+    return _select_highest_new_ecr_core(df_snapshot, current_date, series, 1, 1, 1, tracker=tracker, month=month)
+
+def select_highest_new_ecr_composite_211(df_snapshot, current_date, series, df_regimes=None, tracker=None, month=None, **kwargs):
+    """Emphasize DBB (2,1,1)"""
+    return _select_highest_new_ecr_core(df_snapshot, current_date, series, 2, 1, 1, tracker=tracker, month=month)
+
+def select_highest_new_ecr_composite_121(df_snapshot, current_date, series, df_regimes=None, tracker=None, month=None, **kwargs):
+    """Emphasize Buffer Integrity (1,2,1)"""
+    return _select_highest_new_ecr_core(df_snapshot, current_date, series, 1, 2, 1, tracker=tracker, month=month)
+
+def select_highest_new_ecr_composite_112(df_snapshot, current_date, series, df_regimes=None, tracker=None, month=None, **kwargs):
+    """Emphasize Cap Integrity (1,1,2)"""
+    return _select_highest_new_ecr_core(df_snapshot, current_date, series, 1, 1, 2, tracker=tracker, month=month)
+
+def select_highest_new_ecr_composite_101(df_snapshot, current_date, series, df_regimes=None, tracker=None, month=None, **kwargs):
+    """DBB + Cap only (1,0,1)"""
+    return _select_highest_new_ecr_core(df_snapshot, current_date, series, 1, 0, 1, tracker=tracker, month=month)
+
+def select_highest_new_ecr_composite_221(df_snapshot, current_date, series, df_regimes=None, tracker=None, month=None, **kwargs):
+    """Equal emphasis on buffer metrics (2,2,1)"""
+    return _select_highest_new_ecr_core(df_snapshot, current_date, series, 2, 2, 1, tracker=tracker, month=month)
+
+def select_highest_new_ecr_composite_110(df_snapshot, current_date, series, df_regimes=None, tracker=None, month=None, **kwargs):
+    """Buffer-focused, ignore cap (1,1,0)"""
+    return _select_highest_new_ecr_core(df_snapshot, current_date, series, 1, 1, 0, tracker=tracker, month=month)
+
+def select_ecr_v2_regime_adaptive_new_methodology(df_universe, current_date, series='F', df_regimes=None):
+    """
+    Regime-adaptive wrapper for NEW ECR methodology.
+
+    Switches weights based on current regime:
+    - Bullish (1):  15/15/70 (cap-focused)
+    - Neutral (0):  25/25/50 (balanced)
+    - Bearish (-1): 40/40/20 (protection-focused)
+
+    Uses the NEW ECR composite score calculation from _select_highest_new_ecr_core.
+
+    Parameters
+    ----------
+    df_universe : DataFrame
+        Available funds at current date
+    current_date : datetime
+        Current backtest date
+    series : str
+        Fund series (default 'F')
+    df_regimes : DataFrame
+        Regime classifications with Date and Regimes columns
+
+    Returns
+    -------
+    str or None
+        Selected fund identifier
+    """
+    if df_regimes is None:
+        # Fallback to neutral weights if no regime data
+        w_dbb, w_buffer, w_cap = 0.25, 0.25, 0.50
+    else:
+        # Get current regime
+        regime_row = df_regimes[df_regimes['Date'] == current_date]
+
+        if regime_row.empty:
+            # No regime data for this date, use neutral
+            w_dbb, w_buffer, w_cap = 0.25, 0.25, 0.50
+        else:
+            regime = regime_row.iloc[0]['Regimes']
+
+            if regime == 1:  # Bullish
+                w_dbb, w_buffer, w_cap = 0.15, 0.15, 0.70
+            elif regime == -1:  # Bearish
+                w_dbb, w_buffer, w_cap = 0.40, 0.40, 0.20
+            else:  # Neutral (0)
+                w_dbb, w_buffer, w_cap = 0.25, 0.25, 0.50
+
+    # Call core function with unpacked weights as positional arguments
+    return _select_highest_new_ecr_core(df_universe, current_date, series, w_dbb, w_buffer, w_cap)
+
+def _select_highest_new_ecr_core(df_snapshot, current_date, series, w_dbb, w_buffer, w_cap, tracker=None, month=None):
+    """Core ECR selection with optional tracking."""
+
+    # Your existing debug...
+    available = df_snapshot[df_snapshot['Fund'].str.startswith(series)].copy()
+
+    if available.empty:
+        return None
+
+    # NEW: Debug the scoring loop
+    fund_scores = []
+
+    #print(f"      Starting scoring loop for {len(available)} funds...")
+
+    for idx, (_, row) in enumerate(available.iterrows()):
+        fund_name = row['Fund']
+        print(f"        Fund {idx + 1}/{len(available)}: {fund_name}")
+
+        cap_util = row.get('Cap_Utilization', np.nan)
+        dbb_pct = row.get('Downside Before Buffer (%)', np.nan)
+        remaining_buffer = row.get('Remaining_Buffer', np.nan)
+        original_buffer = row.get('Original_Buffer', np.nan)
+        remaining_days = row.get('Remaining_Outcome_Days', np.nan)
+
+        #print(f"          cap_util={cap_util}, dbb_pct={dbb_pct}, rem_buf={remaining_buffer}, orig_buf={original_buffer}, days={remaining_days}")
+
+        # Component scores
+        dbb_score = np.exp(dbb_pct * 5) if pd.notna(dbb_pct) else 0
+
+        if pd.notna(remaining_buffer) and pd.notna(original_buffer) and pd.notna(dbb_pct):
+            buffer_integrity = max(0, (remaining_buffer + dbb_pct)) / original_buffer if original_buffer > 0 else 0
+        else:
+            buffer_integrity = 0
+
+        cap_integrity = min(cap_util, 1.0) if pd.notna(cap_util) else 0
+        time_scaling = 1 - np.log(remaining_days / 365) if pd.notna(remaining_days) and remaining_days > 0 else 0
+        composite = w_dbb * dbb_score + w_buffer * buffer_integrity + w_cap * cap_integrity + time_scaling
+
+        print(f"          Composite score: {composite}")
+
+        fund_scores.append({
+            'fund': fund_name,
+            'composite_score': composite,
+            'dbb_score': dbb_score,
+            'buffer_integrity': buffer_integrity,
+            'cap_integrity': cap_integrity,
+            'time_scaling': time_scaling,
+            'cap_utilization': cap_util,
+            'dbb_pct': dbb_pct,
+            'remaining_buffer': remaining_buffer,
+            'original_buffer': original_buffer,
+            'remaining_days': remaining_days,
+            'total_days': 365,
+        })
+
+    #print(f"      Total scores calculated: {len(fund_scores)}")
+
+    if not fund_scores:
+        print(f"      ❌ No fund_scores - RETURNING NONE")
+        return None
+
+    selected = max(fund_scores, key=lambda x: x['composite_score'])
+    selected_fund = selected['fund']
+
+    #print(f"      ✅ Selected: {selected_fund} with score {selected['composite_score']}")
+
+    # ADD THIS SECTION:
+    if tracker is not None and month is not None:
+        weight_code = (str(w_dbb), str(w_buffer), str(w_cap))
+        weight_desc = f"Weights ({w_dbb},{w_buffer},{w_cap})"
+        tracker.record_rebalance(current_date, month, (weight_code, weight_desc), fund_scores, selected_fund)
+
+    return selected_fund
 
 # Selection registry for dynamic lookup
 SELECTION_REGISTRY = {
@@ -1726,6 +2073,16 @@ SELECTION_REGISTRY = {
     'select_ecr_v2_cap_moderate_normalized': select_ecr_v2_cap_moderate_normalized,
     'select_ecr_v2_cap_dominant_normalized': select_ecr_v2_cap_dominant_normalized,
     'select_ecr_v2_protection_normalized': select_ecr_v2_protection_normalized,
+
+    'select_ecr_v2_regime_adaptive_normalized': select_ecr_v2_regime_adaptive_normalized,
+
+    'select_highest_new_ecr_composite_111': select_highest_new_ecr_composite_111,
+    'select_highest_new_ecr_composite_211': select_highest_new_ecr_composite_211,
+    'select_highest_new_ecr_composite_121': select_highest_new_ecr_composite_121,
+    'select_highest_new_ecr_composite_112': select_highest_new_ecr_composite_112,
+    'select_highest_new_ecr_composite_101': select_highest_new_ecr_composite_101,
+    'select_highest_new_ecr_composite_221': select_highest_new_ecr_composite_221,
+    'select_highest_new_ecr_composite_110': select_highest_new_ecr_composite_110,
 }
 
 

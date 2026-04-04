@@ -11,6 +11,7 @@ from multiprocessing import Pool, cpu_count
 from functools import partial
 from typing import List, Dict, Any
 import sys
+from config import settings
 
 from backtesting.engine import run_single_ticker_backtest
 from core.selections import get_selection_function
@@ -53,7 +54,8 @@ def _run_single_backtest_wrapper(args):
             },
             selection_func=selection_func,
             roll_dates_dict=shared_data['roll_dates_dict'],
-            series=shared_data['series']
+            series=shared_data['series'],
+            df_regimes=combo.get('df_regimes', None)  # ← ADD THIS LINE
         )
 
         return result
@@ -193,10 +195,6 @@ def run_all_single_ticker_tests_parallel(
 Batch execution of multiple backtest configurations.
 """
 
-import pandas as pd
-from backtesting.engine import run_single_ticker_backtest
-from core.selections import get_selection_function
-
 
 def run_all_single_ticker_tests(df_enriched, df_benchmarks, roll_dates_dict,
                                 trigger_selection_combos, series='F'):
@@ -232,27 +230,27 @@ def run_all_single_ticker_tests(df_enriched, df_benchmarks, roll_dates_dict,
     current_test = 0
     failed_tests = []
 
-    print(f"\n{'#' * 80}")
-    print(f"STARTING BATCH BACKTEST EXECUTION")
-    print(f"{'#' * 80}")
-    print(f"Total tests to run: {total_tests}")
-    print(f"  Combinations: {len(trigger_selection_combos)}")
-    print(f"{'#' * 80}\n")
+    # print(f"\n{'#' * 80}")
+    # print(f"STARTING BATCH BACKTEST EXECUTION")
+    # print(f"{'#' * 80}")
+    # print(f"Total tests to run: {total_tests}")
+    # print(f"  Combinations: {len(trigger_selection_combos)}")
+    # print(f"{'#' * 80}\n")
 
     for combo in trigger_selection_combos:
         # Extract launch months for this specific combo
         launch_months = combo['launch_months']
 
-        print(f"\n{'=' * 80}")
-        print(f"Combination: {combo['trigger_type']} + {combo['selection_func_name']}")
-        print(f"Testing {len(launch_months)} months: {', '.join(launch_months)}")
-        print(f"{'=' * 80}")
+        # print(f"\n{'=' * 80}")
+        # print(f"Combination: {combo['trigger_type']} + {combo['selection_func_name']}")
+        # print(f"Testing {len(launch_months)} months: {', '.join(launch_months)}")
+        # print(f"{'=' * 80}")
 
         for launch_month in launch_months:
             current_test += 1
-            print(f"\n{'─' * 80}")
-            print(f"Progress: {current_test}/{total_tests}")
-            print(f"{'─' * 80}")
+            # print(f"\n{'─' * 80}")
+            # print(f"Progress: {current_test}/{total_tests}")
+            # print(f"{'─' * 80}")
 
             try:
                 # Get selection function from registry
@@ -269,7 +267,8 @@ def run_all_single_ticker_tests(df_enriched, df_benchmarks, roll_dates_dict,
                     },
                     selection_func=selection_func,
                     roll_dates_dict=roll_dates_dict,
-                    series=series
+                    series=series,
+                    df_regimes=combo.get('df_regimes', None)  # ← ADD THIS LINE
                 )
 
                 if result:
@@ -283,11 +282,14 @@ def run_all_single_ticker_tests(df_enriched, df_benchmarks, roll_dates_dict,
                     })
 
             except Exception as e:
-                print(f"\n❌ ERROR in backtest:")
-                print(f"   Launch: {launch_month}")
-                print(f"   Trigger: {combo['trigger_type']}")
-                print(f"   Selection: {combo['selection_func_name']}")
-                print(f"   Error: {str(e)}")
+                # print(f"\n❌ ERROR in backtest:")
+                # print(f"   Launch: {launch_month}")
+                # print(f"   Trigger: {combo['trigger_type']}")
+                # print(f"   Selection: {combo['selection_func_name']}")
+                # print(f"   Error: {str(e)}")
+
+                import traceback
+                traceback.print_exc()  # ← ADD THIS LINE
 
                 failed_tests.append({
                     'launch_month': launch_month,
@@ -296,13 +298,13 @@ def run_all_single_ticker_tests(df_enriched, df_benchmarks, roll_dates_dict,
                     'reason': str(e)
                 })
 
-    print(f"\n{'#' * 80}")
-    print(f"BATCH EXECUTION COMPLETE")
-    print(f"{'#' * 80}")
-    print(f"Successful tests: {len(results_list)}/{total_tests}")
+    # print(f"\n{'#' * 80}")
+    # print(f"BATCH EXECUTION COMPLETE")
+    # print(f"{'#' * 80}")
+    # print(f"Successful tests: {len(results_list)}/{total_tests}")
 
     if failed_tests:
-        print(f"\n⚠️  Failed tests: {len(failed_tests)}")
+        # print(f"\n⚠️  Failed tests: {len(failed_tests)}")
         for failed in failed_tests:
             print(f"  • {failed['launch_month']} | {failed['trigger_type']} | {failed['selection']}")
             print(f"    Reason: {failed['reason']}")
@@ -337,10 +339,10 @@ def run_subset_tests(df_enriched, df_benchmarks, roll_dates_dict,
             if c['trigger_type'] in trigger_type_filter
         ]
 
-    print(f"Running subset tests:")
-    print(f"  Filtered to {len(trigger_selection_combos)} combinations")
-    for combo in trigger_selection_combos:
-        print(f"    {combo['trigger_type']} with {len(combo['launch_months'])} months")
+    # print(f"Running subset tests:")
+    # print(f"  Filtered to {len(trigger_selection_combos)} combinations")
+    # for combo in trigger_selection_combos:
+    #     print(f"    {combo['trigger_type']} with {len(combo['launch_months'])} months")
 
     return run_all_single_ticker_tests(
         df_enriched, df_benchmarks, roll_dates_dict,

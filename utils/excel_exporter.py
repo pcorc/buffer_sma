@@ -638,7 +638,7 @@ def export_consolidated_workbook_append(results_list, summary_df, output_dir, ru
 Excel export utilities for consolidated workbook output with forward regime analysis.
 """
 
-def export_main_consolidated_workbook(
+def export_main_consolidated_workbook_old(
         results_list, summary_df, output_dir, run_name='mainpy_consolidated',
         df_regimes=None, regime_df=None, capture_ratios=None,
         trigger_summary=None, selection_summary=None, month_summary=None,
@@ -840,6 +840,398 @@ def export_main_consolidated_workbook(
             _format_sheet(writer.sheets['By Launch Month'], header_fill, header_font)
             tab_count += 1
 
+
+    return filepath
+
+
+"""
+COMPLETE REPLACEMENT FUNCTION FOR utils/excel_exporter.py
+==========================================================
+
+Replace the ENTIRE export_main_consolidated_workbook function with this version.
+It auto-detects ECR vs Existing 90% comparison for any batch.
+"""
+
+
+def export_main_consolidated_workbook(
+        results_list, summary_df, output_dir, run_name='mainpy_consolidated',
+        df_regimes=None, regime_df=None, capture_ratios=None,
+        trigger_summary=None, selection_summary=None, month_summary=None,
+        # Forward regime parameters
+        df_forward_regimes=None, future_regime_df=None,
+        optimal_3m=None, optimal_6m=None,
+        intent_vs_regime_3m=None, intent_vs_regime_6m=None,
+        robust_strategies_3m=None, robust_strategies_6m=None,
+        ranked_6m_vs_spy=None, ranked_6m_vs_bufr=None
+):
+    """
+    Export comprehensive backtest results to single Excel workbook.
+
+    Enhanced with forward regime analysis tabs for both 3M and 6M horizons.
+    Auto-detects and adds ECR vs Existing 90% comparison sheet when both strategies present.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f'{run_name}_{timestamp}.xlsx'
+    filepath = os.path.join(output_dir, filename)
+
+    print(f"\n{'=' * 80}")
+    print(f"EXPORTING CONSOLIDATED WORKBOOK")
+
+    # Header formatting
+    header_fill = PatternFill(start_color='366092', end_color='366092', fill_type='solid')
+    header_font = Font(bold=True, color='FFFFFF')
+
+    tab_count = 0
+
+    with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
+
+        # =====================================================================
+        # TAB 1: SUMMARY
+        # =====================================================================
+        summary_export = summary_df.copy()
+        summary_export.insert(0, 'iteration', range(1, len(summary_export) + 1))
+
+        # Round numeric columns
+        pct_cols = [col for col in summary_export.columns if 'return' in col or 'excess' in col or 'dd' in col or 'volatility' in col]
+        for col in pct_cols:
+            if col in summary_export.columns:
+                summary_export[col] = summary_export[col].round(4)
+        if 'strategy_sharpe' in summary_export.columns:
+            summary_export['strategy_sharpe'] = summary_export['strategy_sharpe'].round(2)
+
+        summary_export.to_excel(writer, sheet_name='Summary', index=False)
+        _format_sheet(writer.sheets['Summary'], header_fill, header_font)
+        tab_count += 1
+
+        # =====================================================================
+        # AUTO-DETECT: ECR vs EXISTING 90% COMPARISON
+        # =====================================================================
+
+        # Check if we have both ECR and Existing 90% strategies
+        has_ecr = False
+        has_existing_90 = False
+
+        for result in results_list:
+            selection = result.get('selection_algo', '').lower()
+            if 'new_ecr_composite' in selection or 'select_highest' in selection or 'ecr' in selection:
+                has_ecr = True
+            if 'most_recent_launch' in selection:
+                trigger = result.get('trigger_type', '')
+                trigger_params = result.get('trigger_params', {})
+                if trigger == 'cap_utilization_threshold' and trigger_params.get('threshold') in [0.9, 0.90]:
+                    has_existing_90 = True
+
+        if has_ecr and has_existing_90:
+            print(f"  Creating ECR vs Existing 90% comparison sheet...")
+
+            comparison_data = []
+
+            for result in results_list:
+                launch = result.get('launch_month', 'UNK')
+                selection = result.get('selection_algo', '').lower()
+                trigger = result.get('trigger_type', '')
+                trigger_params = result.get('trigger_params', {})
+
+                # Identify strategy type
+                is_ecr = 'new_ecr_composite' in selection or 'select_highest' in selection or 'ecr' in selection
+                is_existing = ('most_recent_launch' in selection and
+                               trigger == 'cap_utilization_threshold' and
+                               trigger_params.get('threshold') in [0.9, 0.90])
+
+                if is_ecr or is_existing:
+                    strategy_type = 'New_ECR' if is_ecr else 'Existing_90'
+
+                    comparison_data.append({
+                        'launch_month': launch,
+                        'strategy_type': strategy_type,
+                        'total_return': result.get('strategy_total_return', 0) * 100,
+                        'ann_return': result.get('strategy_ann_return', 0) * 100,
+                        'sharpe': result.get('strategy_sharpe', 0),
+                        'volatility': result.get('strategy_volatility', 0) * 100,
+                        'max_dd': result.get('strategy_max_dd', 0) * 100,
+                        'num_trades': result.get('num_trades', 0),
+                        'vs_spy': result.get('vs_spy_excess', 0) * 100,
+                        'vs_bufr': result.get('vs_bufr_excess', 0) * 100,
+                        'start_date': result.get('start_date', '').strftime('%Y-%m-%d') if result.get('start_date') else '',
+                        'end_date': result.get('end_date', '').strftime('%Y-%m-%d') if result.get('end_date') else ''
+                    })
+
+            if comparison_data:
+                df_comp = pd.DataFrame(comparison_data)
+                months = sorted(df_comp['launch_month'].unique())
+
+                # Build comparison rows
+                comparison_rows = []
+                comparison_rows.append(['Month', 'Start Date',
+                                        'ECR Total%', 'ECR Ann%', 'ECR Sharpe', 'ECR Vol%', 'ECR MaxDD%', 'ECR Trades',
+                                        'E90 Total%', 'E90 Ann%', 'E90 Sharpe', 'E90 Vol%', 'E90 MaxDD%', 'E90 Trades',
+                                        'Δ Total%', 'Δ Sharpe'])
+
+                for month in months:
+                    month_data = df_comp[df_comp['launch_month'] == month]
+                    ecr_data = month_data[month_data['strategy_type'] == 'New_ECR']
+                    existing_data = month_data[month_data['strategy_type'] == 'Existing_90']
+
+                    if ecr_data.empty and existing_data.empty:
+                        continue
+
+                    row = [month]
+                    start_date = ecr_data['start_date'].iloc[0] if not ecr_data.empty else (existing_data['start_date'].iloc[0] if not existing_data.empty else '')
+                    row.append(start_date)
+
+                    # ECR metrics
+                    if not ecr_data.empty:
+                        ecr_row = ecr_data.iloc[0]
+                        row.extend([
+                            ecr_row['total_return'],
+                            ecr_row['ann_return'],
+                            ecr_row['sharpe'],
+                            ecr_row['volatility'],
+                            ecr_row['max_dd'],
+                            ecr_row['num_trades']
+                        ])
+                    else:
+                        row.extend(['', '', '', '', '', ''])
+
+                    # Existing 90% metrics
+                    if not existing_data.empty:
+                        existing_row = existing_data.iloc[0]
+                        row.extend([
+                            existing_row['total_return'],
+                            existing_row['ann_return'],
+                            existing_row['sharpe'],
+                            existing_row['volatility'],
+                            existing_row['max_dd'],
+                            existing_row['num_trades']
+                        ])
+                    else:
+                        row.extend(['', '', '', '', '', ''])
+
+                    # Differences
+                    if not ecr_data.empty and not existing_data.empty:
+                        diff_return = ecr_row['total_return'] - existing_row['total_return']
+                        diff_sharpe = ecr_row['sharpe'] - existing_row['sharpe']
+                        row.extend([diff_return, diff_sharpe])
+                    else:
+                        row.extend(['', ''])
+
+                    comparison_rows.append(row)
+
+                # Add average row
+                avg_ecr_return = df_comp[df_comp['strategy_type'] == 'New_ECR']['total_return'].mean()
+                avg_ecr_sharpe = df_comp[df_comp['strategy_type'] == 'New_ECR']['sharpe'].mean()
+                avg_existing_return = df_comp[df_comp['strategy_type'] == 'Existing_90']['total_return'].mean()
+                avg_existing_sharpe = df_comp[df_comp['strategy_type'] == 'Existing_90']['sharpe'].mean()
+
+                comparison_rows.append(['AVERAGE', '',
+                                        avg_ecr_return, '', avg_ecr_sharpe, '', '', '',
+                                        avg_existing_return, '', avg_existing_sharpe, '', '', '',
+                                        avg_ecr_return - avg_existing_return,
+                                        avg_ecr_sharpe - avg_existing_sharpe])
+
+                # Write to Excel
+                df_comparison = pd.DataFrame(comparison_rows[1:], columns=comparison_rows[0])
+                df_comparison.to_excel(writer, sheet_name='ECR_vs_Existing90', index=False)
+
+                # Format comparison sheet
+                ws = writer.sheets['ECR_vs_Existing90']
+
+                # Header
+                for cell in ws[1]:
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+
+                # Format numbers and color-code differences
+                from openpyxl.styles import Font as OpenpyxlFont
+
+                for row_idx, row in enumerate(ws.iter_rows(min_row=2, max_row=ws.max_row), start=2):
+                    # Percentages
+                    for col_idx in [2, 3, 5, 6, 8, 9, 11, 12]:
+                        if row[col_idx].value and isinstance(row[col_idx].value, (int, float)):
+                            row[col_idx].number_format = '0.00'
+
+                    # Sharpe
+                    for col_idx in [4, 10]:
+                        if row[col_idx].value and isinstance(row[col_idx].value, (int, float)):
+                            row[col_idx].number_format = '0.00'
+
+                    # Differences (color code)
+                    for col_idx in [14, 15]:
+                        if row[col_idx].value and isinstance(row[col_idx].value, (int, float)):
+                            row[col_idx].number_format = '+0.00;-0.00'
+                            if row[col_idx].value > 0:
+                                row[col_idx].font = OpenpyxlFont(color="008000", bold=True)
+                            elif row[col_idx].value < 0:
+                                row[col_idx].font = OpenpyxlFont(color="FF0000", bold=True)
+
+                # Average row formatting
+                for cell in ws[ws.max_row]:
+                    cell.font = OpenpyxlFont(bold=True)
+                    cell.fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+
+                # Column widths
+                for col in ws.columns:
+                    ws.column_dimensions[col[0].column_letter].width = 12
+
+                print(f"    ✓ ECR vs Existing 90% comparison ({len(months)} months)")
+                tab_count += 1
+
+        # =====================================================================
+        # TAB: FUTURE REGIME ANALYSIS (6M)
+        # =====================================================================
+        if future_regime_df is not None and not future_regime_df.empty:
+            future_export = future_regime_df.copy()
+            numeric_cols = future_export.select_dtypes(include=['float64']).columns
+            future_export[numeric_cols] = future_export[numeric_cols].round(4)
+            future_export.to_excel(writer, sheet_name='Future Regime Analysis', index=False)
+            _format_sheet(writer.sheets['Future Regime Analysis'], header_fill, header_font)
+            tab_count += 1
+
+        # =====================================================================
+        # TABS: OPTIMAL STRATEGIES BY REGIME (6M)
+        # =====================================================================
+        if optimal_6m:
+            for regime in ['bull', 'bear', 'neutral']:
+                if regime in optimal_6m and not optimal_6m[regime].empty:
+                    regime_optimal = optimal_6m[regime].copy()
+                    numeric_cols = regime_optimal.select_dtypes(include=['float64']).columns
+                    regime_optimal[numeric_cols] = regime_optimal[numeric_cols].round(4)
+
+                    sheet_name = f'Optimal-{regime.title()} (6M)'
+                    regime_optimal.to_excel(writer, sheet_name=sheet_name, index=False)
+                    _format_sheet(writer.sheets[sheet_name], header_fill, header_font)
+                    tab_count += 1
+
+        # =====================================================================
+        # TABS: OPTIMAL STRATEGIES BY REGIME (3M)
+        # =====================================================================
+        if optimal_3m:
+            for regime in ['bull', 'bear', 'neutral']:
+                if regime in optimal_3m and not optimal_3m[regime].empty:
+                    regime_optimal = optimal_3m[regime].copy()
+                    numeric_cols = regime_optimal.select_dtypes(include=['float64']).columns
+                    regime_optimal[numeric_cols] = regime_optimal[numeric_cols].round(4)
+
+                    sheet_name = f'Optimal-{regime.title()} (3M)'
+                    regime_optimal.to_excel(writer, sheet_name=sheet_name, index=False)
+                    _format_sheet(writer.sheets[sheet_name], header_fill, header_font)
+                    tab_count += 1
+
+        # =====================================================================
+        # TAB: INTENT VS FUTURE REGIME (6M)
+        # =====================================================================
+        if intent_vs_regime_6m is not None and not intent_vs_regime_6m.empty:
+            intent_export = intent_vs_regime_6m.copy()
+            numeric_cols = intent_export.select_dtypes(include=['float64']).columns
+            intent_export[numeric_cols] = intent_export[numeric_cols].round(4)
+            intent_export.to_excel(writer, sheet_name='Intent vs Future (6M)', index=False)
+            _format_sheet(writer.sheets['Intent vs Future (6M)'], header_fill, header_font)
+            tab_count += 1
+
+        # =====================================================================
+        # TAB: INTENT VS FUTURE REGIME (3M)
+        # =====================================================================
+        if intent_vs_regime_3m is not None and not intent_vs_regime_3m.empty:
+            intent_export = intent_vs_regime_3m.copy()
+            numeric_cols = intent_export.select_dtypes(include=['float64']).columns
+            intent_export[numeric_cols] = intent_export[numeric_cols].round(4)
+            intent_export.to_excel(writer, sheet_name='Intent vs Future (3M)', index=False)
+            _format_sheet(writer.sheets['Intent vs Future (3M)'], header_fill, header_font)
+            tab_count += 1
+
+        # =====================================================================
+        # TAB: ROBUST STRATEGIES (6M)
+        # =====================================================================
+        if robust_strategies_6m is not None and not robust_strategies_6m.empty:
+            robust_export = robust_strategies_6m.copy()
+            numeric_cols = robust_export.select_dtypes(include=['float64']).columns
+            robust_export[numeric_cols] = robust_export[numeric_cols].round(4)
+            robust_export.to_excel(writer, sheet_name='Robust Strategies (6M)', index=False)
+            _format_sheet(writer.sheets['Robust Strategies (6M)'], header_fill, header_font)
+            tab_count += 1
+
+        # =====================================================================
+        # TAB: ROBUST STRATEGIES (3M)
+        # =====================================================================
+        if robust_strategies_3m is not None and not robust_strategies_3m.empty:
+            robust_export = robust_strategies_3m.copy()
+            numeric_cols = robust_export.select_dtypes(include=['float64']).columns
+            robust_export[numeric_cols] = robust_export[numeric_cols].round(4)
+            robust_export.to_excel(writer, sheet_name='Robust Strategies (3M)', index=False)
+            _format_sheet(writer.sheets['Robust Strategies (3M)'], header_fill, header_font)
+            tab_count += 1
+
+        # =====================================================================
+        # TAB: RANKED BY VS BUFR (6M)
+        # =====================================================================
+        if ranked_6m_vs_bufr is not None and not ranked_6m_vs_bufr.empty:
+            ranked_export = ranked_6m_vs_bufr.copy()
+            numeric_cols = ranked_export.select_dtypes(include=['float64']).columns
+            ranked_export[numeric_cols] = ranked_export[numeric_cols].round(4)
+            ranked_export.to_excel(writer, sheet_name='Ranked vs BUFR (6M)', index=False)
+            _format_sheet(writer.sheets['Ranked vs BUFR (6M)'], header_fill, header_font)
+            tab_count += 1
+
+        # =====================================================================
+        # TAB: RANKED BY VS SPY (6M)
+        # =====================================================================
+        if ranked_6m_vs_spy is not None and not ranked_6m_vs_spy.empty:
+            ranked_export = ranked_6m_vs_spy.copy()
+            numeric_cols = ranked_export.select_dtypes(include=['float64']).columns
+            ranked_export[numeric_cols] = ranked_export[numeric_cols].round(4)
+            ranked_export.to_excel(writer, sheet_name='Ranked vs SPY (6M)', index=False)
+            _format_sheet(writer.sheets['Ranked vs SPY (6M)'], header_fill, header_font)
+            tab_count += 1
+
+        # =====================================================================
+        # ORIGINAL ANALYSIS TABS
+        # =====================================================================
+
+        if regime_df is not None and not regime_df.empty:
+            regime_export = regime_df.copy()
+            numeric_cols = regime_export.select_dtypes(include=['float64']).columns
+            regime_export[numeric_cols] = regime_export[numeric_cols].round(4)
+            regime_export.to_excel(writer, sheet_name='Current Regime Analysis', index=False)
+            _format_sheet(writer.sheets['Current Regime Analysis'], header_fill, header_font)
+            tab_count += 1
+
+        if capture_ratios is not None and not capture_ratios.empty:
+            capture_export = capture_ratios.copy()
+            numeric_cols = capture_export.select_dtypes(include=['float64']).columns
+            capture_export[numeric_cols] = capture_export[numeric_cols].round(4)
+            capture_export.to_excel(writer, sheet_name='Capture Ratios', index=False)
+            _format_sheet(writer.sheets['Capture Ratios'], header_fill, header_font)
+            tab_count += 1
+
+        if trigger_summary is not None and not trigger_summary.empty:
+            trigger_export = trigger_summary.copy()
+            numeric_cols = trigger_export.select_dtypes(include=['float64']).columns
+            trigger_export[numeric_cols] = trigger_export[numeric_cols].round(4)
+            trigger_export.to_excel(writer, sheet_name='By Trigger Type', index=False)
+            _format_sheet(writer.sheets['By Trigger Type'], header_fill, header_font)
+            tab_count += 1
+
+        if selection_summary is not None and not selection_summary.empty:
+            selection_export = selection_summary.copy()
+            numeric_cols = selection_export.select_dtypes(include=['float64']).columns
+            selection_export[numeric_cols] = selection_export[numeric_cols].round(4)
+            selection_export.to_excel(writer, sheet_name='By Selection Algo', index=False)
+            _format_sheet(writer.sheets['By Selection Algo'], header_fill, header_font)
+            tab_count += 1
+
+        if month_summary is not None and not month_summary.empty:
+            month_export = month_summary.copy()
+            numeric_cols = month_export.select_dtypes(include=['float64']).columns
+            month_export[numeric_cols] = month_export[numeric_cols].round(4)
+            month_export.to_excel(writer, sheet_name='By Launch Month', index=False)
+            _format_sheet(writer.sheets['By Launch Month'], header_fill, header_font)
+            tab_count += 1
+
+    print(f"  ✓ Exported {tab_count} tabs")
+    print(f"{'=' * 80}\n")
 
     return filepath
 

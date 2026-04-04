@@ -5,11 +5,13 @@ Core backtesting engine for single ticker strategy.
 import pandas as pd
 import numpy as np
 from core.triggers import get_trigger_function
-from core.selections import get_selection_function
-
+from core.selections import get_selection_function, RebalanceScoringTracker
+from config import settings
+from utils.date_utils import get_rebalance_trading_dates
 
 def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
-                               trigger_config, selection_func, roll_dates_dict, series='F'):
+                               trigger_config, selection_func, roll_dates_dict, series='F',
+                               df_regimes=None):
     """
     Core backtest engine for single ticker strategy.
 
@@ -22,6 +24,7 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
     Parameters:
       df_enriched: Preprocessed fund data with derived metrics
       df_benchmarks: DataFrame with Date, SPY, BUFR columns (with daily returns)
+      df_regimes: Optional DataFrame with S&P 500 regime data (for regime-adaptive strategies)
       launch_month: Launch month abbreviation (e.g., 'MAR')
       trigger_config: Dict with 'type' and 'params' keys
       selection_func: Function reference for fund selection
@@ -35,9 +38,11 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         - Daily NAV series
         - Trade history
     """
-    print(f"\n{'=' * 80}")
-    print(f"Running backtest: {launch_month} | {trigger_config['type']} | {selection_func.__name__}")
-    print(f"{'=' * 80}")
+    # print(f"\n{'=' * 80}")
+    # print(f"Running backtest: {launch_month} | {trigger_config['type']} | {selection_func.__name__}")
+    # print(f"{'=' * 80}")
+
+    tracker = RebalanceScoringTracker()
 
     # Initialize
     current_fund = series + launch_month
@@ -56,17 +61,28 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         print(f"ERROR: No valid roll dates for fund {current_fund}")
         return None
 
-    # Start at the first roll date (this is already >= July 2020 from preprocessing)
-    first_roll_date = pd.Timestamp(sorted(fund_roll_dates)[0])
+    # Apply common start date filter if specified
+    if hasattr(settings, 'COMMON_START_DATE') and settings.COMMON_START_DATE:
+        common_start = pd.Timestamp(settings.COMMON_START_DATE)
+        # Only keep roll dates that are >= common start date
+        eligible_roll_dates = [rd for rd in fund_roll_dates if pd.Timestamp(rd) >= common_start]
 
-    # Ensure we also have benchmark data from this date
-    start_date = max(first_roll_date, BUFR_INCEPTION)
+        if len(eligible_roll_dates) == 0:
+            # print(f"⚠️  No roll dates for {current_fund} after common start date {common_start.date()}")
+            return None
+
+        first_roll_date = pd.Timestamp(sorted(eligible_roll_dates)[0])
+    else:
+        first_roll_date = pd.Timestamp(sorted(fund_roll_dates)[0])
+
+    # Start date is the first eligible roll date (already accounts for BUFR inception)
+    start_date = first_roll_date
 
     # Filter fund data to start from this aligned date
     fund_data = fund_data[fund_data['Date'] >= start_date].copy()
 
     if fund_data.empty:
-        print(f"ERROR: No fund data after alignment date {start_date.date()}")
+        # print(f"ERROR: No fund data after alignment date {start_date.date()}")
         return None
 
     end_date = fund_data['Date'].max()
@@ -99,7 +115,7 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
     trigger_func = get_trigger_function(trigger_type)
 
     if trigger_type == 'rebalance_time_period':
-        from utils.date_utils import get_rebalance_trading_dates
+
 
         frequency_map = {
             'monthly': 'M',
@@ -179,7 +195,6 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         if current_date.strftime('%Y-%m-%d') == '2024-09-20':
             x=1
 
-
         # Calculate returns from roll date
         fund_return_from_roll = None
         ref_index_return_from_roll = None
@@ -245,17 +260,35 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
                 trigger_reason = f"{trigger_type}={threshold}"
 
         # If triggered, select new fund
+        # If triggered, select new fund
         if triggered:
+            # print(f"  🔔 Trigger fired on {current_date.strftime('%Y-%m-%d')}")
+
             # Get universe of available funds on current date
             df_universe = df_enriched[
                 (df_enriched['Date'] == current_date) &
                 (df_enriched['Fund'].str.startswith(series))
                 ].copy()
 
+            # print(f"     Available funds: {df_universe['Fund'].unique().tolist() if not df_universe.empty else 'NONE'}")
+
+            # AFTER:
             if not df_universe.empty:
-                new_fund = selection_func(df_universe, current_date, series)
+                new_fund = selection_func(
+                    df_universe,
+                    current_date,
+                    series,
+                    df_regimes=df_regimes,
+                    tracker=tracker,
+                    month=launch_month
+                )
+
+                # print(f"     Selected fund: {new_fund}")
+                # print(f"     Current holding: {current_fund}")
 
                 if new_fund and new_fund != current_fund:
+                    # print(f"     ✅ TRADE: {current_fund} → {new_fund}")
+
                     # Log trade
                     trade_history.append({
                         'Date': current_date,
@@ -267,13 +300,16 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
 
                     current_fund = new_fund
                     num_trades += 1
-                    #print(f"  Trade {num_trades}: {current_date.date()} | {new_fund} | {trigger_reason}")
+                else:
+                    print(f"     ⏸️  NO TRADE: Already holding {new_fund or current_fund}")
+            else:
+                print(f"     ❌ No universe data available")
 
     # Calculate performance metrics
     df_perf = pd.DataFrame(daily_performance)
 
     if len(df_perf) < 2:
-        print("ERROR: Insufficient data for performance calculation")
+        # print("ERROR: Insufficient data for performance calculation")
         return None
 
     # Strategy metrics
@@ -344,5 +380,8 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         'vs_hold_excess': vs_hold_excess,
 
         'daily_performance': df_perf,
-        'trade_history': pd.DataFrame(trade_history) if trade_history else pd.DataFrame()
+        'trade_history': pd.DataFrame(trade_history) if trade_history else pd.DataFrame(),
+
+        'scoring_tracker': tracker  # ← ADD THIS
+
     }
