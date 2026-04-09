@@ -25,7 +25,7 @@ def validate_fund_data(df: pd.DataFrame, series: str = 'F') -> tuple[bool, list[
     required_cols = [
         'Date', 'Fund', 'Fund Value (USD)', 'Remaining Outcome Days',
         'Remaining Cap', 'Reference Asset Value (USD)', 'Reference Asset Return (%)',
-        'Downside Before Buffer (%)'
+        'Downside Before Buffer'
     ]
 
     missing_cols = [col for col in required_cols if col not in cleaned_df.columns]

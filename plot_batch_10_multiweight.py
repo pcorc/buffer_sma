@@ -19,9 +19,6 @@ WEIGHT_COLORS = {
 
 
 def main():
-    print("=" * 80)
-    print("BATCH 10 PLOTTER - MULTI-WEIGHT VARIATIONS")
-    print("=" * 80)
 
     regime_file = Path('data/sp500_regimes.csv')
     csv_file = Path('output/backtest_results/batch_10/batch_10_daily_time_series.csv')
@@ -41,11 +38,9 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load data
-    print(f"\nLoading data...")
     df_regimes = load_regime_data(regime_file)
     df = pd.read_csv(csv_file)
     df['Date'] = pd.to_datetime(df['Date'])
-    print(f"✅ Loaded {len(df)} rows, {len(df.columns)} columns")
 
     # Detect months and weight variations
     months, weight_variations = detect_strategies(df)
@@ -60,10 +55,6 @@ def main():
         print(f"\n❌ ERROR: No months detected!")
         return
 
-    # Create BOTH combined and individual plots
-    print(f"\n{'=' * 80}")
-    print(f"CREATING COMBINED CANVAS PLOTS")
-    print(f"{'=' * 80}")
 
     if len(months) <= 6:
         create_combined_canvas(df, df_regimes, months, weight_variations, output_dir, has_existing_90,
@@ -75,24 +66,12 @@ def main():
         create_combined_canvas(df, df_regimes, months[mid:], weight_variations, output_dir, has_existing_90,
                                plot_name='batch_10_combined_part2')
 
-    print(f"\n{'=' * 80}")
-    print(f"CREATING INDIVIDUAL PLOTS")
-    print(f"{'=' * 80}")
 
     for month in months:
         create_individual_plot(df, df_regimes, month, weight_variations, output_dir, has_existing_90)
 
     print(f"\n{'=' * 80}")
     print(f"✅ COMPLETE!")
-
-    if len(months) <= 6:
-        print(f"  - batch_10_combined_all.png ({len(months)} months)")
-    else:
-        print(f"  - batch_10_combined_part1.png (first 6 months)")
-        print(f"  - batch_10_combined_part2.png (remaining {len(months) - 6} months)")
-    print(f"\nIndividual plots:")
-    for month in months:
-        print(f"  - batch_10_all_weights_{month}.png")
 
 
 def load_regime_data(regime_file_path):

@@ -63,7 +63,7 @@ def trigger_downside_before_buffer_threshold(fund_data_row, threshold):
     Returns:
       Boolean: True if Downside Before Buffer <= threshold
     """
-    downside_col = 'Downside Before Buffer (%)'
+    downside_col = 'Downside Before Buffer'
     if downside_col not in fund_data_row.index:
         return False
 
@@ -85,7 +85,7 @@ def trigger_ref_asset_return_threshold(fund_data_row, threshold):
     Returns:
       Boolean: True if Reference Asset Return crosses threshold
     """
-    ref_return_col = 'Reference Asset Return (%)'
+    ref_return_col = 'Reference Asset Return'
     if ref_return_col not in fund_data_row.index:
         return False
 

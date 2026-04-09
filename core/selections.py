@@ -326,7 +326,7 @@ def select_downside_buffer_highest(df_universe, current_date, series='F', df_reg
     if df_universe.empty:
         return None
 
-    downside_col = 'Downside Before Buffer (%)'
+    downside_col = 'Downside Before Buffer'
 
     if downside_col not in df_universe.columns:
         return df_universe.iloc[0]['Fund']
@@ -369,7 +369,7 @@ def select_downside_buffer_lowest(df_universe, current_date, series='F'):
     if df_universe.empty:
         return None
 
-    downside_col = 'Downside Before Buffer (%)'
+    downside_col = 'Downside Before Buffer'
 
     if downside_col not in df_universe.columns:
         return df_universe.iloc[0]['Fund']
@@ -530,7 +530,7 @@ def select_cost_analysis(df_universe, current_date, series='F', df_regimes=None)
         return None
 
     df_universe = df_universe.copy()
-    downside_col = 'Downside Before Buffer (%)'
+    downside_col = 'Downside Before Buffer'
     df_universe['Cost_Per_Day'] = np.inf
 
     valid_mask = (
@@ -646,7 +646,7 @@ def select_enhanced_cost_ratio_bullish(df_universe, current_date, series='F', df
 
     # Required columns
     required_cols = ['Remaining Buffer', 'Original_Buffer', 'Remaining Cap',
-                     'Original_Cap', 'Downside Before Buffer (%)',
+                     'Original_Cap', 'Downside Before Buffer',
                      'Remaining Outcome Days', 'Total_Outcome_Days']
 
     if not all(col in df_universe.columns for col in required_cols):
@@ -660,7 +660,7 @@ def select_enhanced_cost_ratio_bullish(df_universe, current_date, series='F', df
         df_work['Original_Buffer'].notna() &
         df_work['Remaining Cap'].notna() &
         df_work['Original_Cap'].notna() &
-        df_work['Downside Before Buffer (%)'].notna() &
+        df_work['Downside Before Buffer'].notna() &
         df_work['Remaining Outcome Days'].notna() &
         df_work['Total_Outcome_Days'].notna() &
         (df_work['Original_Buffer'] > 0) &
@@ -675,7 +675,7 @@ def select_enhanced_cost_ratio_bullish(df_universe, current_date, series='F', df
         return select_most_recent_launch(df_universe, current_date, series)
 
     # Component 1: DBB Score (no scaling)
-    df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer (%)'] / 100)
+    df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer'] / 100)
 
     # Component 2: Buffer Integrity Score (with scaling)
     df_valid['Buffer_Integrity'] = (df_valid['Remaining Buffer'] / 100) / df_valid['Original_Buffer']
@@ -750,7 +750,7 @@ def select_enhanced_cost_ratio_bearish(df_universe, current_date, series='F', df
 
     # Required columns
     required_cols = ['Remaining Buffer', 'Original_Buffer', 'Remaining Cap',
-                     'Original_Cap', 'Downside Before Buffer (%)',
+                     'Original_Cap', 'Downside Before Buffer',
                      'Remaining Outcome Days', 'Total_Outcome_Days']
 
     if not all(col in df_universe.columns for col in required_cols):
@@ -764,7 +764,7 @@ def select_enhanced_cost_ratio_bearish(df_universe, current_date, series='F', df
         df_work['Original_Buffer'].notna() &
         df_work['Remaining Cap'].notna() &
         df_work['Original_Cap'].notna() &
-        df_work['Downside Before Buffer (%)'].notna() &
+        df_work['Downside Before Buffer'].notna() &
         df_work['Remaining Outcome Days'].notna() &
         df_work['Total_Outcome_Days'].notna() &
         (df_work['Original_Buffer'] > 0) &
@@ -779,7 +779,7 @@ def select_enhanced_cost_ratio_bearish(df_universe, current_date, series='F', df
         return select_most_recent_launch(df_universe, current_date, series)
 
     # Component 1: DBB Score (no scaling)
-    df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer (%)'] / 100)
+    df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer'] / 100)
 
     # Component 2: Buffer Integrity Score (with scaling)
     df_valid['Buffer_Integrity'] = (df_valid['Remaining Buffer'] / 100) / df_valid['Original_Buffer']
@@ -853,7 +853,7 @@ def select_enhanced_cost_ratio_neutral(df_universe, current_date, series='F', df
 
     # Required columns
     required_cols = ['Remaining Buffer', 'Original_Buffer', 'Remaining Cap',
-                     'Original_Cap', 'Downside Before Buffer (%)',
+                     'Original_Cap', 'Downside Before Buffer',
                      'Remaining Outcome Days', 'Total_Outcome_Days']
 
     if not all(col in df_universe.columns for col in required_cols):
@@ -867,7 +867,7 @@ def select_enhanced_cost_ratio_neutral(df_universe, current_date, series='F', df
         df_work['Original_Buffer'].notna() &
         df_work['Remaining Cap'].notna() &
         df_work['Original_Cap'].notna() &
-        df_work['Downside Before Buffer (%)'].notna() &
+        df_work['Downside Before Buffer'].notna() &
         df_work['Remaining Outcome Days'].notna() &
         df_work['Total_Outcome_Days'].notna() &
         (df_work['Original_Buffer'] > 0) &
@@ -882,7 +882,7 @@ def select_enhanced_cost_ratio_neutral(df_universe, current_date, series='F', df
         return select_most_recent_launch(df_universe, current_date, series)
 
     # Component 1: DBB Score (no scaling)
-    df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer (%)'] / 100)
+    df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer'] / 100)
 
     # Component 2: Buffer Integrity Score (with scaling)
     df_valid['Buffer_Integrity'] = (df_valid['Remaining Buffer'] / 100) / df_valid['Original_Buffer']
@@ -962,7 +962,7 @@ def _enhanced_cost_ratio_core(
 
     # Required columns
     required_cols = ['Remaining Buffer', 'Original_Buffer', 'Remaining Cap',
-                     'Original_Cap', 'Downside Before Buffer (%)',
+                     'Original_Cap', 'Downside Before Buffer',
                      'Remaining Outcome Days', 'Total_Outcome_Days']
 
     if not all(col in df_universe.columns for col in required_cols):
@@ -976,7 +976,7 @@ def _enhanced_cost_ratio_core(
             df_work['Original_Buffer'].notna() &
             df_work['Remaining Cap'].notna() &
             df_work['Original_Cap'].notna() &
-            df_work['Downside Before Buffer (%)'].notna() &
+            df_work['Downside Before Buffer'].notna() &
             df_work['Remaining Outcome Days'].notna() &
             df_work['Total_Outcome_Days'].notna() &
             (df_work['Original_Buffer'] > 0) &
@@ -991,7 +991,7 @@ def _enhanced_cost_ratio_core(
         return select_most_recent_launch(df_universe, current_date, series)
 
     # Component 1: DBB Score (no scaling)
-    df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer (%)'] / 100)
+    df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer'] / 100)
 
     # Component 2: Buffer Integrity Score (with scaling)
     df_valid['Buffer_Integrity'] = (df_valid['Remaining Buffer'] / 100) / df_valid['Original_Buffer']
@@ -1125,7 +1125,7 @@ def _ecr_mechanics_core(
         return None
 
     required_cols = ['Remaining Buffer', 'Original_Buffer', 'Remaining Cap',
-                     'Original_Cap', 'Downside Before Buffer (%)',
+                     'Original_Cap', 'Downside Before Buffer',
                      'Remaining Outcome Days', 'Total_Outcome_Days']
 
     if not all(col in df_universe.columns for col in required_cols):
@@ -1138,7 +1138,7 @@ def _ecr_mechanics_core(
             df_work['Original_Buffer'].notna() &
             df_work['Remaining Cap'].notna() &
             df_work['Original_Cap'].notna() &
-            df_work['Downside Before Buffer (%)'].notna() &
+            df_work['Downside Before Buffer'].notna() &
             df_work['Remaining Outcome Days'].notna() &
             df_work['Total_Outcome_Days'].notna() &
             (df_work['Original_Buffer'] > 0) &
@@ -1158,7 +1158,7 @@ def _ecr_mechanics_core(
 
     if dbb_scaled:
         # Scale DBB like Buffer Integrity
-        df_valid['DBB_Raw'] = 1 + (df_valid['Downside Before Buffer (%)'] / 100)
+        df_valid['DBB_Raw'] = 1 + (df_valid['Downside Before Buffer'] / 100)
         dbb_min = df_valid['DBB_Raw'].min()
         dbb_max = df_valid['DBB_Raw'].max()
 
@@ -1168,7 +1168,7 @@ def _ecr_mechanics_core(
             df_valid['DBB_Score'] = 0.75
     else:
         # Use raw DBB (current default)
-        df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer (%)'] / 100)
+        df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer'] / 100)
 
     # =========================================================================
     # Component 2: Buffer Integrity Score (with parameterized range)
@@ -1434,7 +1434,7 @@ def select_enhanced_cost_ratio_neutral_v2(df_universe, current_date, series='F',
 
     # Required columns
     required_cols = ['Remaining Buffer', 'Original_Buffer', 'Remaining Cap',
-                     'Original_Cap', 'Downside Before Buffer (%)',
+                     'Original_Cap', 'Downside Before Buffer',
                      'Remaining Outcome Days', 'Total_Outcome_Days']
 
     if not all(col in df_universe.columns for col in required_cols):
@@ -1448,7 +1448,7 @@ def select_enhanced_cost_ratio_neutral_v2(df_universe, current_date, series='F',
             df_work['Original_Buffer'].notna() &
             df_work['Remaining Cap'].notna() &
             df_work['Original_Cap'].notna() &
-            df_work['Downside Before Buffer (%)'].notna() &
+            df_work['Downside Before Buffer'].notna() &
             df_work['Remaining Outcome Days'].notna() &
             df_work['Total_Outcome_Days'].notna() &
             (df_work['Original_Buffer'] > 0) &
@@ -1466,7 +1466,7 @@ def select_enhanced_cost_ratio_neutral_v2(df_universe, current_date, series='F',
     # Component 1: DBB Score (unchanged from V1)
     # =========================================================================
 
-    df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer (%)'] / 100)
+    df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer'] / 100)
 
     # =========================================================================
     # Component 2: Buffer Integrity Score (NEW LOGIC)
@@ -1485,7 +1485,7 @@ def select_enhanced_cost_ratio_neutral_v2(df_universe, current_date, series='F',
            - If Remaining ≈ Original: At ATM → Score = 1.0
            - If Remaining < Original: In buffer → Score = Remaining / Original
         """
-        dbb = row['Downside Before Buffer (%)']
+        dbb = row['Downside Before Buffer']
         remaining_buffer = row['Remaining Buffer'] / 100  # Convert to decimal
         original_buffer = row['Original_Buffer']
 
@@ -1575,14 +1575,12 @@ def _select_ecr_v2_core(df_universe, current_date, series, w_dbb, w_buffer, w_ca
     All the buffer integrity logic, time scaling, etc. is the same.
     Only difference is the weights can be adjusted.
     """
-    import pandas as pd
-    import numpy as np
 
     if df_universe.empty:
         return None
 
     required_cols = ['Remaining Buffer', 'Original_Buffer', 'Remaining Cap',
-                     'Original_Cap', 'Downside Before Buffer (%)',
+                     'Original_Cap', 'Downside Before Buffer',
                      'Remaining Outcome Days', 'Total_Outcome_Days']
 
     if not all(col in df_universe.columns for col in required_cols):
@@ -1595,7 +1593,7 @@ def _select_ecr_v2_core(df_universe, current_date, series, w_dbb, w_buffer, w_ca
             df_work['Original_Buffer'].notna() &
             df_work['Remaining Cap'].notna() &
             df_work['Original_Cap'].notna() &
-            df_work['Downside Before Buffer (%)'].notna() &
+            df_work['Downside Before Buffer'].notna() &
             df_work['Remaining Outcome Days'].notna() &
             df_work['Total_Outcome_Days'].notna() &
             (df_work['Original_Buffer'] > 0) &
@@ -1610,11 +1608,11 @@ def _select_ecr_v2_core(df_universe, current_date, series, w_dbb, w_buffer, w_ca
         return select_most_recent_launch(df_universe, current_date, series)
 
     # Component 1: DBB Score
-    df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer (%)'] / 100)
+    df_valid['DBB_Score'] = 1 + (df_valid['Downside Before Buffer'] / 100)
 
     # Component 2: Buffer Integrity Score (V2 logic)
     def calculate_buffer_score(row):
-        dbb = row['Downside Before Buffer (%)']
+        dbb = row['Downside Before Buffer']
         remaining_buffer = row['Remaining Buffer'] / 100
         original_buffer = row['Original_Buffer']
 
@@ -1718,7 +1716,7 @@ def _select_ecr_v2_normalized_core(df_universe, current_date, series, w_dbb, w_b
         return None
 
     required_cols = ['Remaining Buffer', 'Original_Buffer', 'Remaining Cap',
-                     'Original_Cap', 'Downside Before Buffer (%)',
+                     'Original_Cap', 'Downside Before Buffer',
                      'Remaining Outcome Days', 'Total_Outcome_Days']
 
     if not all(col in df_universe.columns for col in required_cols):
@@ -1731,7 +1729,7 @@ def _select_ecr_v2_normalized_core(df_universe, current_date, series, w_dbb, w_b
             df_work['Original_Buffer'].notna() &
             df_work['Remaining Cap'].notna() &
             df_work['Original_Cap'].notna() &
-            df_work['Downside Before Buffer (%)'].notna() &
+            df_work['Downside Before Buffer'].notna() &
             df_work['Remaining Outcome Days'].notna() &
             df_work['Total_Outcome_Days'].notna() &
             (df_work['Original_Buffer'] > 0) &
@@ -1749,18 +1747,18 @@ def _select_ecr_v2_normalized_core(df_universe, current_date, series, w_dbb, w_b
     # STEP 1: Calculate Raw Scores
     # =========================================================================
 
-    # Component 1: DBB Score
-    df_valid['DBB_Score_Raw'] = 1 + (df_valid['Downside Before Buffer (%)'] / 100)
+    # Component 1: DBB Score (NO /100 - data already decimal!)
+    df_valid['DBB_Score_Raw'] = 1 + df_valid['Downside Before Buffer']
 
     # Component 2: Buffer Integrity Score (V2 logic)
     def calculate_buffer_score(row):
-        dbb = row['Downside Before Buffer (%)']
-        remaining_buffer = row['Remaining Buffer'] / 100
-        original_buffer = row['Original_Buffer']
+        dbb = row['Downside Before Buffer']  # Already decimal
+        remaining_buffer = row['Remaining Buffer']  # Already decimal
+        original_buffer = row['Original_Buffer']  # Already decimal
 
         if dbb < 0:
             # Market rallied - penalize distance from ATM
-            distance_from_atm = abs(dbb / 100)
+            distance_from_atm = abs(dbb)  # NO /100 - already decimal!
             max_expected_distance = original_buffer * 2
 
             if max_expected_distance > 0:
@@ -1786,8 +1784,8 @@ def _select_ecr_v2_normalized_core(df_universe, current_date, series, w_dbb, w_b
 
     df_valid['Buffer_Score_Raw'] = df_valid.apply(calculate_buffer_score, axis=1)
 
-    # Component 3: Cap Score
-    df_valid['Cap_Score_Raw'] = (df_valid['Remaining Cap'] / 100) / df_valid['Original_Cap']
+    # Component 3: Cap Score (NO /100 - data already decimal!)
+    df_valid['Cap_Score_Raw'] = df_valid['Remaining Cap'] / df_valid['Original_Cap']
 
     # Component 4: Time Factor
     df_valid['Time_Ratio'] = df_valid['Remaining Outcome Days'] / df_valid['Total_Outcome_Days']
@@ -1959,13 +1957,14 @@ def _select_highest_new_ecr_core(df_snapshot, current_date, series, w_dbb, w_buf
 
     for idx, (_, row) in enumerate(available.iterrows()):
         fund_name = row['Fund']
-        print(f"        Fund {idx + 1}/{len(available)}: {fund_name}")
-
+        #print(f"        Fund {idx + 1}/{len(available)}: {fund_name}")
         cap_util = row.get('Cap_Utilization', np.nan)
-        dbb_pct = row.get('Downside Before Buffer (%)', np.nan)
-        remaining_buffer = row.get('Remaining_Buffer', np.nan)
-        original_buffer = row.get('Original_Buffer', np.nan)
-        remaining_days = row.get('Remaining_Outcome_Days', np.nan)
+        cap_integrity_numerator = row.get('Remaining Cap Net', np.nan)
+        cap_integrity_denominator = row.get('Original Cap Net', np.nan)
+        dbb_pct = row.get('Downside Before Buffer Net', np.nan)
+        remaining_buffer = row.get('Remaining Buffer Net', np.nan)
+        original_buffer = row.get('Original Buffer Net', np.nan)
+        remaining_days = row.get('Remaining Outcome Days', np.nan)
 
         #print(f"          cap_util={cap_util}, dbb_pct={dbb_pct}, rem_buf={remaining_buffer}, orig_buf={original_buffer}, days={remaining_days}")
 
@@ -1977,11 +1976,11 @@ def _select_highest_new_ecr_core(df_snapshot, current_date, series, w_dbb, w_buf
         else:
             buffer_integrity = 0
 
-        cap_integrity = min(cap_util, 1.0) if pd.notna(cap_util) else 0
+        cap_integrity = min(cap_integrity_numerator / cap_integrity_denominator, 1.0) if pd.notna(cap_integrity_numerator) else 0
         time_scaling = 1 - np.log(remaining_days / 365) if pd.notna(remaining_days) and remaining_days > 0 else 0
-        composite = w_dbb * dbb_score + w_buffer * buffer_integrity + w_cap * cap_integrity + time_scaling
+        composite = (w_dbb * dbb_score + w_buffer * buffer_integrity + w_cap * cap_integrity) / time_scaling
 
-        print(f"          Composite score: {composite}")
+        #print(f"          Composite score: {composite}")
 
         fund_scores.append({
             'fund': fund_name,

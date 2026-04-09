@@ -54,29 +54,25 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
 
     BUFR_INCEPTION = pd.Timestamp('2020-07-01')
 
-    # Get the first roll date for this fund (already filtered to >= July 2020 in preprocessing)
+    # Get the first roll date for trigger/rebalance date filtering
     fund_roll_dates = fund_data['Roll_Date'].dropna().unique()
 
     if len(fund_roll_dates) == 0:
         print(f"ERROR: No valid roll dates for fund {current_fund}")
         return None
 
-    # Apply common start date filter if specified
     if hasattr(settings, 'COMMON_START_DATE') and settings.COMMON_START_DATE:
         common_start = pd.Timestamp(settings.COMMON_START_DATE)
-        # Only keep roll dates that are >= common start date
         eligible_roll_dates = [rd for rd in fund_roll_dates if pd.Timestamp(rd) >= common_start]
-
         if len(eligible_roll_dates) == 0:
-            # print(f"⚠️  No roll dates for {current_fund} after common start date {common_start.date()}")
             return None
-
         first_roll_date = pd.Timestamp(sorted(eligible_roll_dates)[0])
     else:
         first_roll_date = pd.Timestamp(sorted(fund_roll_dates)[0])
 
-    # Start date is the first eligible roll date (already accounts for BUFR inception)
-    start_date = first_roll_date
+    # Start date is fund's actual first available date, not the first roll date
+    # first_roll_date is the first ANNIVERSARY date - fund data predates this
+    start_date = max(fund_data['Date'].min(), BUFR_INCEPTION)
 
     # Filter fund data to start from this aligned date
     fund_data = fund_data[fund_data['Date'] >= start_date].copy()
@@ -183,7 +179,7 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         current_fund_nav = current_fund_row.get('Fund Value (USD)', None)
         current_ref_index = current_fund_row.get('Reference Asset Value (USD)', None)
         current_remaining_cap_pct = current_fund_row.get('Remaining Cap', None)
-        current_downside_before_buffer = current_fund_row.get('Downside Before Buffer (%)', None)
+        current_downside_before_buffer = current_fund_row.get('Downside Before Buffer', None)
 
         # Roll date reference values (constant throughout period)
         roll_date = current_fund_row.get('Roll_Date', None)
@@ -260,7 +256,6 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
                 trigger_reason = f"{trigger_type}={threshold}"
 
         # If triggered, select new fund
-        # If triggered, select new fund
         if triggered:
             # print(f"  🔔 Trigger fired on {current_date.strftime('%Y-%m-%d')}")
 
@@ -300,8 +295,8 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
 
                     current_fund = new_fund
                     num_trades += 1
-                else:
-                    print(f"     ⏸️  NO TRADE: Already holding {new_fund or current_fund}")
+                # else:
+                #     print(f"     ⏸️  NO TRADE: Already holding {new_fund or current_fund}")
             else:
                 print(f"     ❌ No universe data available")
 

@@ -38,8 +38,7 @@ for directory in [RESULTS_DIR, REGIME_DIR, TRADE_LOG_DIR]:
 # =============================================================================
 
 COMMON_START_DATE = None  # Default: use all available data
-COMMON_START_DATE = '2023-01-01'
-COMMON_START_DATE = '2021-01-15'  # Align to BUFR inception
+COMMON_START_DATE = '2021-01-19'  # Align to BUFR inception
 # COMMON_START_DATE = '2021-07-01'  # Post-COVID period
 # COMMON_START_DATE = '2022-01-01'  # Recent data only
 
