@@ -335,8 +335,8 @@ def _enrich_with_roll_dates(df, roll_dates_dict):
             # Assign to period
             if len(period_indices) > 0:
                 df.loc[period_indices, 'Roll_Date'] = roll_date
-                # df.loc[period_indices, 'Outcome_Period_ID'] = f"{fund}_P{period_idx + 1}"
                 df.loc[period_indices, 'Original_Cap'] = original_cap
+                # df.loc[period_indices, 'Outcome_Period_ID'] = f"{fund}_P{period_idx + 1}"
                 # df.loc[period_indices, 'Original_Buffer'] = original_buffer
                 # df.loc[period_indices, 'Starting_Fund_Value'] = starting_fund_value
                 # df.loc[period_indices, 'Fund_Cap_Value'] = fund_cap_value
