@@ -86,3 +86,13 @@ def get_rebalance_trading_dates(
             continue
 
     return trading_date_pairs
+
+
+def get_first_trading_day_of_month(df, year, month):
+    """Find first available trading date in a specific month."""
+    mask = (df['Date'].dt.year == year) & (df['Date'].dt.month == month)
+    available = df[mask]['Date'].sort_values()
+
+    if len(available) > 0:
+        return available.iloc[0]
+    return None

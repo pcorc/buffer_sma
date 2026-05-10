@@ -248,24 +248,6 @@ def _enrich_with_roll_dates(df, roll_dates_dict):
     if not monthly_roll_dates:
         raise ValueError("No monthly roll dates found")
 
-    # # Initialize new columns
-    # new_columns = [
-    #     'Roll_Date', 'Outcome_Period_ID',
-    #     'Original_Cap', 'Original_Buffer',
-    #     'Starting_Fund_Value', 'Fund_Cap_Value',
-    #     'Starting_Ref_Asset_Value', 'Ref_Asset_Cap_Value',
-    #     'Buffer_Level', 'Total_Outcome_Days', 'Starting_Downside_Before_Buffer',
-    #     'Cap_Utilization', 'Cap_Remaining_Pct', 'Current_Remaining_Cap'
-    # ]
-    #
-    # for col in new_columns:
-    #     if col == 'Roll_Date':
-    #         df[col] = pd.NaT
-    #     elif col == 'Outcome_Period_ID':
-    #         df[col] = None
-    #     else:
-    #         df[col] = np.nan
-
     new_columns = ['Cap_Utilization']
     funds_processed = 0
     skipped_funds = []
