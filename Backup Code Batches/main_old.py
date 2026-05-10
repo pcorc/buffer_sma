@@ -9,7 +9,7 @@
 # 5. Visualization and Excel export
 #
 # Usage:
-#     python main.py
+#     python main_old.py
 # """
 #
 # import os

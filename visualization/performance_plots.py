@@ -1101,7 +1101,7 @@ def _has_threshold_strategies(summary_df: pd.DataFrame) -> bool:
 
 
 # =============================================================================
-# BACKWARD COMPATIBILITY: Original function for main.py
+# BACKWARD COMPATIBILITY: Original function for main_old.py
 # =============================================================================
 
 def create_all_plots(
@@ -1111,7 +1111,7 @@ def create_all_plots(
         output_dir: str
 ):
     """
-    Original function signature for backward compatibility with main.py.
+    Original function signature for backward compatibility with main_old.py.
 
     Delegates to generate_batch_visualizations with appropriate defaults.
     """
@@ -1127,7 +1127,7 @@ def create_all_plots(
     return generate_batch_visualizations(
         results_list=results_list,
         summary_df=summary_df,
-        future_regime_df=pd.DataFrame(),  # Empty - main.py doesn't use forward regimes
+        future_regime_df=pd.DataFrame(),  # Empty - main_old.py doesn't use forward regimes
         optimal_strategies=optimal_strategies,
         output_dir=output_dir,
         batch_number=None

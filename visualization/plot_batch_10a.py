@@ -20,16 +20,16 @@ WEIGHT_COLORS = {
 
 def main():
 
-    regime_file = Path('data/sp500_regimes.csv')
-    csv_file = Path('output/backtest_results/batch_10/batch_10_daily_time_series.csv')
-    output_dir = Path('output/backtest_results/batch_10')
+    regime_file = Path('../data/sp500_regimes.csv')
+    csv_file = Path('../output/backtest_results/batch_10/batch_10_daily_time_series.csv')
+    output_dir = Path('../output/backtest_results/batch_10')
 
 
     if not regime_file.exists() or not csv_file.exists():
         print(f"\n❌ ERROR: Files not found!")
         if not csv_file.exists():
             print(f"\n   Searching for batch_10_daily_time_series.csv...")
-            base = Path('output')
+            base = Path('../output')
             if base.exists():
                 for file in base.rglob('batch_10_daily_time_series.csv'):
                     print(f"   Found: {file}")
