@@ -2016,6 +2016,81 @@ def _select_highest_new_ecr_core(df_snapshot, current_date, series, w_dbb, w_buf
 
     return selected_fund
 
+
+
+def compute_ecr_scores(df_universe, series, w_dbb, w_buffer, w_cap):
+    """
+    Compute ECR composite scores for all funds in universe.
+
+    Extracted from _select_highest_new_ecr_core so both the selection
+    function and the ecr_percentile_trigger can call it without duplication.
+
+    Parameters:
+        df_universe: DataFrame of available funds on current date
+        series: Fund series letter (e.g. 'F')
+        w_dbb: Weight for DBB score
+        w_buffer: Weight for Buffer Integrity score
+        w_cap: Weight for Cap Integrity score
+
+    Returns:
+        dict: {fund_name: composite_score} for all scoreable funds
+    """
+    available = df_universe[df_universe['Fund'].str.startswith(series)].copy()
+
+    if available.empty:
+        return {}
+
+    scores = {}
+
+    for _, row in available.iterrows():
+        fund_name = row['Fund']
+
+        dbb_net             = row.get('Downside Before Buffer Net', np.nan)
+        remaining_buffer    = row.get('Remaining Buffer Net', np.nan)
+        original_buffer     = row.get('Original Buffer Net', np.nan)
+        remaining_cap_net   = row.get('Remaining Cap Net', np.nan)
+        original_cap_net    = row.get('Original Cap Net', np.nan)
+        remaining_days      = row.get('Remaining Outcome Days', np.nan)
+
+        # DBB Score: EXP(dbb_net * 5)
+        dbb_score = np.exp(dbb_net * 5) if pd.notna(dbb_net) else 0
+
+        # Buffer Integrity: MAX(0, rem_buffer_net + dbb_net) / orig_buffer_net
+        if pd.notna(remaining_buffer) and pd.notna(original_buffer) and pd.notna(dbb_net):
+            buffer_integrity = max(0, (remaining_buffer + dbb_net)) / original_buffer if original_buffer > 0 else 0
+        else:
+            buffer_integrity = 0
+
+        # Cap Integrity: MIN(rem_cap_net / orig_cap_net, 1)
+        if pd.notna(remaining_cap_net) and pd.notna(original_cap_net) and original_cap_net > 0:
+            cap_integrity = min(remaining_cap_net / original_cap_net, 1.0)
+        else:
+            cap_integrity = 0
+
+        # ── Composite Score ───────────────────────────────────────────────────────────
+        weighted_sum = w_dbb * dbb_score + w_buffer * buffer_integrity + w_cap * cap_integrity
+
+        # ── Time Scaling (optional) ───────────────────────────────────────────────────
+        # Uncomment to apply time scaling as a divisor:
+        time_scaling = np.where(
+            ~np.isnan(remaining_days) & (remaining_days > 0),
+            1.0 - np.log(remaining_days / 365.0),
+            1.0
+        )
+        composite = np.where(time_scaling != 0, weighted_sum / time_scaling, 0.0)
+
+        # ── Delta Scaling (optional — requires delta column in pipeline) ──────────────
+        # composite = weighted_sum * np.log(1 + delta)   # LN(1 + delta) multiplier
+        # composite = weighted_sum * delta               # raw delta multiplier
+
+        # ── No scaling (current) ─────────────────────────────────────────────────────
+        # composite = weighted_sum
+
+        scores[fund_name] = composite
+
+    return scores
+
+
 # Selection registry for dynamic lookup
 SELECTION_REGISTRY = {
     'select_most_recent_launch': select_most_recent_launch,

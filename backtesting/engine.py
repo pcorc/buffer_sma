@@ -8,6 +8,7 @@ from core.triggers import get_trigger_function
 from core.selections import get_selection_function, RebalanceScoringTracker
 from config import settings
 from utils.date_utils import get_rebalance_trading_dates
+from core.selections import compute_ecr_scores
 
 def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
                                trigger_config, selection_func, roll_dates_dict, series='F',
@@ -54,25 +55,18 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
 
     BUFR_INCEPTION = pd.Timestamp('2020-07-01')
 
-    # Get the first roll date for trigger/rebalance date filtering
-    fund_roll_dates = fund_data['Roll_Date'].dropna().unique()
+    # Get roll dates for this fund, filtered to >= BUFR inception
+    fund_roll_dates = sorted([
+        pd.Timestamp(rd) for rd in fund_data['Roll_Date'].dropna().unique()
+        if pd.Timestamp(rd) >= BUFR_INCEPTION
+    ])
 
     if len(fund_roll_dates) == 0:
-        print(f"ERROR: No valid roll dates for fund {current_fund}")
+        print(f"ERROR: No valid roll dates for {current_fund} after {BUFR_INCEPTION.date()}")
         return None
 
-    if hasattr(settings, 'COMMON_START_DATE') and settings.COMMON_START_DATE:
-        common_start = pd.Timestamp(settings.COMMON_START_DATE)
-        eligible_roll_dates = [rd for rd in fund_roll_dates if pd.Timestamp(rd) >= common_start]
-        if len(eligible_roll_dates) == 0:
-            return None
-        first_roll_date = pd.Timestamp(sorted(eligible_roll_dates)[0])
-    else:
-        first_roll_date = pd.Timestamp(sorted(fund_roll_dates)[0])
-
-    # Start date is fund's actual first available date, not the first roll date
-    # first_roll_date is the first ANNIVERSARY date - fund data predates this
-    start_date = max(fund_data['Date'].min(), BUFR_INCEPTION)
+    # Start date is the first available roll date after BUFR inception
+    start_date = fund_roll_dates[0]
 
     # Filter fund data to start from this aligned date
     fund_data = fund_data[fund_data['Date'] >= start_date].copy()
@@ -98,9 +92,14 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
     # Track if this is the first day (to handle initialization)
     first_day = True
 
+    # Initialize before main loop
     daily_performance = []
     trade_history = []
     num_trades = 0
+    spread_history = []
+    days_since_rebalance = 0
+    df_universe = None
+    df_universe_ecr = None
 
     # Get business days for iteration
     all_dates = pd.date_range(start=start_date, end=end_date, freq='B')
@@ -135,6 +134,38 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         # Use trading dates (not roll dates) for actual execution
         trading_dates_list = [trading_date for roll_date, trading_date in trading_date_pairs]
 
+    elif trigger_type == 'ecr_percentile_trigger':
+        # Pre-extract params once outside the loop
+        ecr_w_dbb    = trigger_params.get('w_dbb', 1)
+        ecr_w_buffer = trigger_params.get('w_buffer', 1)
+        ecr_w_cap    = trigger_params.get('w_cap', 1)
+        ecr_pct_threshold  = trigger_params['percentile_threshold']
+        ecr_min_holding    = trigger_params.get('min_holding_days', 21)
+        ecr_rolling_window = trigger_params.get('rolling_window', 252)
+        ecr_min_abs_spread = trigger_params.get('min_absolute_spread', 0.05)  # ← ADD
+
+
+        # Parse weight_code string into individual weights if provided
+        weight_code = trigger_params.get('weight_code', '111')
+        if len(weight_code) == 3 and weight_code.isdigit():
+            ecr_w_dbb    = int(weight_code[0])
+            ecr_w_buffer = int(weight_code[1])
+            ecr_w_cap    = int(weight_code[2])
+
+    elif trigger_type == 'ecr_score_threshold':
+        ecr_w_dbb = int(trigger_params.get('weight_code', '111')[0])
+        ecr_w_buffer = int(trigger_params.get('weight_code', '111')[1])
+        ecr_w_cap = int(trigger_params.get('weight_code', '111')[2])
+        ecr_score_thresh = trigger_params['score_threshold']
+        ecr_min_holding = trigger_params.get('min_holding_days', 63)
+
+    elif trigger_type == 'ecr_percentile_rank':
+        ecr_w_dbb = int(trigger_params.get('weight_code', '111')[0])
+        ecr_w_buffer = int(trigger_params.get('weight_code', '111')[1])
+        ecr_w_cap = int(trigger_params.get('weight_code', '111')[2])
+        ecr_pct_threshold = trigger_params['percentile_threshold']
+        ecr_min_holding = trigger_params.get('min_holding_days', 22)
+
     # Main backtest loop
     for current_date in all_dates:
         # Get current fund data
@@ -144,18 +175,21 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
             ]
 
         if current_fund_data.empty:
-            # No data for current fund on this date, skip
             continue
+
+        # Progress indicator for ecr_percentile_trigger (slow daily scoring)
+        # if trigger_type in ('ecr_score_threshold', 'ecr_percentile_trigger', 'ecr_percentile_rank') and current_date.day == 1:
+        #     print(f"    {launch_month} | {current_date.strftime('%Y-%m')} | "
+        #           f"trades={num_trades} | days_held={days_since_rebalance}")
 
         current_fund_row = current_fund_data.iloc[0]
         daily_return = current_fund_row['daily_return']
 
         # On first day, just initialize NAVs at 100 without applying returns
         if first_day:
-            # All NAVs stay at 100 on first day
             first_day = False
+
         else:
-            # Update strategy NAV with daily return
             strategy_nav *= (1 + daily_return)
 
             # Update benchmark NAVs
@@ -164,7 +198,7 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
                 spy_nav *= (1 + bench_data.iloc[0]['SPY_daily_return'])
                 bufr_nav *= (1 + bench_data.iloc[0]['BUFR_daily_return'])
 
-            # Update buy-and-hold NAV (original launch month fund)
+            # Update buy-and-hold NAV
             hold_fund = series + launch_month
             hold_data = df_enriched[
                 (df_enriched['Fund'] == hold_fund) &
@@ -172,6 +206,9 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
                 ]
             if not hold_data.empty:
                 hold_nav *= (1 + hold_data.iloc[0]['daily_return'])
+
+            # Track days since last rebalance for ecr_percentile_trigger
+            days_since_rebalance += 1
 
         # Store daily performance with comprehensive roll date metrics
 
@@ -187,9 +224,6 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         starting_ref_index = current_fund_row.get('Starting_Ref_Asset_Value', None)
         original_cap = current_fund_row.get('Original_Cap', None)
         original_buffer = current_fund_row.get('Original_Buffer', None)
-
-        if current_date.strftime('%Y-%m-%d') == '2024-09-20':
-            x=1
 
         # Calculate returns from roll date
         fund_return_from_roll = None
@@ -248,27 +282,110 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
             triggered = trigger_func(current_date, trading_dates_list)
             if triggered:
                 trigger_reason = f"{frequency}_rebalance"
+
+        elif trigger_type == 'ecr_percentile_trigger':
+            # Build universe here — needed before trigger evaluation
+            df_universe_ecr = df_enriched[
+                (df_enriched['Date'] == current_date) &
+                (df_enriched['Fund'].str.startswith(series))
+                ].copy()
+
+            if not df_universe_ecr.empty:
+                triggered, spread = trigger_func(
+                    current_fund=current_fund,
+                    df_universe=df_universe_ecr,
+                    series=series,
+                    w_dbb=ecr_w_dbb,
+                    w_buffer=ecr_w_buffer,
+                    w_cap=ecr_w_cap,
+                    spread_history=spread_history,
+                    percentile_threshold=ecr_pct_threshold,
+                    min_holding_days=ecr_min_holding,
+                    days_since_rebalance=days_since_rebalance,
+                    rolling_window=ecr_rolling_window,
+                    min_absolute_spread=ecr_min_abs_spread  # ← ADD
+
+                )
+                # Always append spread to history regardless of trigger
+                if not np.isnan(spread):
+                    spread_history.append(spread)
+
+                if triggered:
+                    trigger_reason = f"ecr_spread_pct={ecr_pct_threshold}"
+
+        elif trigger_type == 'ecr_score_threshold':
+            df_universe_ecr = df_enriched[
+                (df_enriched['Date'] == current_date) &
+                (df_enriched['Fund'].str.startswith(series))
+                ].copy()
+
+            if not df_universe_ecr.empty:
+                triggered = trigger_func(
+                    current_fund=current_fund,
+                    df_universe=df_universe_ecr,
+                    series=series,
+                    w_dbb=ecr_w_dbb,
+                    w_buffer=ecr_w_buffer,
+                    w_cap=ecr_w_cap,
+                    score_threshold=ecr_score_thresh,
+                    min_holding_days=ecr_min_holding,
+                    days_since_rebalance=days_since_rebalance
+                )
+                if triggered:
+                    trigger_reason = f"ecr_score<{ecr_score_thresh}"
+
+        elif trigger_type == 'ecr_percentile_rank':
+            df_universe_ecr = df_enriched[
+                (df_enriched['Date'] == current_date) &
+                (df_enriched['Fund'].str.startswith(series))
+                ].copy()
+
+            if not df_universe_ecr.empty:
+                triggered = trigger_func(
+                    current_fund=current_fund,
+                    df_universe=df_universe_ecr,
+                    series=series,
+                    w_dbb=ecr_w_dbb,
+                    w_buffer=ecr_w_buffer,
+                    w_cap=ecr_w_cap,
+                    percentile_threshold=ecr_pct_threshold,
+                    min_holding_days=ecr_min_holding,
+                    days_since_rebalance=days_since_rebalance
+                )
+                if triggered:
+                    trigger_reason = f"ecr_pct_rank<{ecr_pct_threshold}th"
+
         else:
-            # Threshold-based trigger
+            # All other threshold-based triggers
             threshold = trigger_params['threshold']
             triggered = trigger_func(current_fund_row, threshold)
             if triggered:
                 trigger_reason = f"{trigger_type}={threshold}"
 
-        # If triggered, select new fund
         if triggered:
-            # print(f"  🔔 Trigger fired on {current_date.strftime('%Y-%m-%d')}")
+            if trigger_type in ('ecr_percentile_trigger',
+                                'ecr_score_threshold',
+                                'ecr_relative_spread',
+                                'ecr_percentile_rank'):
+                df_universe = df_universe_ecr
 
-            # Get universe of available funds on current date
-            df_universe = df_enriched[
-                (df_enriched['Date'] == current_date) &
-                (df_enriched['Fund'].str.startswith(series))
-                ].copy()
+            else:
+                df_universe = df_enriched[
+                    (df_enriched['Date'] == current_date) &
+                    (df_enriched['Fund'].str.startswith(series))
+                    ].copy()
 
-            # print(f"     Available funds: {df_universe['Fund'].unique().tolist() if not df_universe.empty else 'NONE'}")
-
-            # AFTER:
             if not df_universe.empty:
+                # Record outgoing fund score before selection
+                if trigger_type in ('ecr_score_threshold', 'ecr_relative_spread', 'ecr_percentile_rank'):
+                    all_scores = compute_ecr_scores(df_universe, series, ecr_w_dbb, ecr_w_buffer, ecr_w_cap)
+                    outgoing_score = all_scores.get(current_fund, np.nan)
+                    best_score = max(all_scores.values()) if all_scores else np.nan
+                else:
+                    all_scores = {}
+                    outgoing_score = np.nan
+                    best_score = np.nan
+
                 new_fund = selection_func(
                     df_universe,
                     current_date,
@@ -278,25 +395,29 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
                     month=launch_month
                 )
 
-                # print(f"     Selected fund: {new_fund}")
-                # print(f"     Current holding: {current_fund}")
-
                 if new_fund and new_fund != current_fund:
-                    # print(f"     ✅ TRADE: {current_fund} → {new_fund}")
-
-                    # Log trade
                     trade_history.append({
                         'Date': current_date,
                         'From_Fund': current_fund,
                         'To_Fund': new_fund,
                         'Trigger_Reason': trigger_reason,
-                        'NAV_at_Switch': strategy_nav
+                        'NAV_at_Switch': strategy_nav,
+                        'Outgoing_ECR_Score': outgoing_score,
+                        'Incoming_ECR_Score': all_scores.get(new_fund, np.nan),
+                        'Score_Spread': (best_score - outgoing_score) / best_score
+                        if pd.notna(outgoing_score) and best_score > 0 else np.nan,
                     })
-
                     current_fund = new_fund
                     num_trades += 1
-                # else:
-                #     print(f"     ⏸️  NO TRADE: Already holding {new_fund or current_fund}")
+                    days_since_rebalance = 0
+
+                    if trigger_type in ('ecr_percentile_trigger', 'ecr_score_threshold', 'ecr_percentile_rank'):
+                        scores = compute_ecr_scores(df_universe, series, ecr_w_dbb, ecr_w_buffer, ecr_w_cap)
+                        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+                        print(f"    *** TRADE {num_trades} on {current_date.strftime('%Y-%m-%d')}: "
+                              f"→ {new_fund} | scores: "
+                              f"{' | '.join([f'{f}={s:.3f}' for f, s in ranked])}")
+
             else:
                 print(f"     ❌ No universe data available")
 
@@ -377,6 +498,6 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         'daily_performance': df_perf,
         'trade_history': pd.DataFrame(trade_history) if trade_history else pd.DataFrame(),
 
-        'scoring_tracker': tracker  # ← ADD THIS
-
+        'scoring_tracker': tracker,
+        'spread_history': spread_history,
     }

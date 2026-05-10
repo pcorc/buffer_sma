@@ -247,9 +247,7 @@ def _enrich_with_roll_dates(df, roll_dates_dict):
     
     if not monthly_roll_dates:
         raise ValueError("No monthly roll dates found")
-    
-    print(f"  Using {len(monthly_roll_dates)} monthly roll dates")
-    
+
     # # Initialize new columns
     # new_columns = [
     #     'Roll_Date', 'Outcome_Period_ID',
@@ -335,7 +333,7 @@ def _enrich_with_roll_dates(df, roll_dates_dict):
             # Assign to period
             if len(period_indices) > 0:
                 df.loc[period_indices, 'Roll_Date'] = roll_date
-                df.loc[period_indices, 'Original_Cap'] = original_cap
+                # df.loc[period_indices, 'Original_Cap'] = original_cap
                 # df.loc[period_indices, 'Outcome_Period_ID'] = f"{fund}_P{period_idx + 1}"
                 # df.loc[period_indices, 'Original_Buffer'] = original_buffer
                 # df.loc[period_indices, 'Starting_Fund_Value'] = starting_fund_value
@@ -349,17 +347,25 @@ def _enrich_with_roll_dates(df, roll_dates_dict):
         funds_processed += 1
     
     # # Calculate daily derived metrics (NO /100 - data already decimal!)
+    df['Original_Cap'] = df['Original Cap Net']
     df['Current_Remaining_Cap'] = df['Remaining Cap']
     df['Cap_Utilization'] = (df['Original_Cap'] - df['Current_Remaining_Cap']) / df['Original_Cap']
     df['Cap_Utilization'] = df['Cap_Utilization'].fillna(0).clip(lower=0, upper=1)
     df['Cap_Remaining_Pct'] = df['Current_Remaining_Cap'] / df['Original_Cap']
     df['Cap_Remaining_Pct'] = df['Cap_Remaining_Pct'].fillna(1).clip(lower=0, upper=1)
-    
+
+    # Buffer utilization — same pattern using net columns
+    # Original_Buffer_Net captured at roll date, Remaining Buffer Net updates daily
+    df['Buffer_Utilization'] = (
+            (df['Original Buffer Net'] - df['Remaining Buffer Net']) / df['Original Buffer Net']
+    )
+    df['Buffer_Utilization'] = df['Buffer_Utilization'].fillna(0).clip(lower=0, upper=1)
+    df['Buffer_Remaining_Pct'] = df['Remaining Buffer Net'] / df['Original Buffer Net']
+    df['Buffer_Remaining_Pct'] = df['Buffer_Remaining_Pct'].fillna(1).clip(lower=0, upper=1)
+
     if skipped_funds:
         print(f"  ⚠️  Skipped {len(skipped_funds)} funds (no valid roll dates)")
-    
-    #print(f"  ✅ Processed {funds_processed} funds, {df['Outcome_Period_ID'].nunique()} outcome periods")
-    
+
     return df
 
 
