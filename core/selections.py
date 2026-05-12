@@ -43,6 +43,10 @@ class RebalanceScoringTracker:
                 'Time_Scaling': fund_score.get('time_scaling', np.nan),
                 'Composite_Score': fund_score.get('composite_score', np.nan),
                 'Selected': fund_score['fund'] == selected_fund,
+                # Batch 11: Par Proximity fields (NaN for v1 runs, populated for par_prox runs)
+                'Par_Proximity': fund_score.get('par_proximity', np.nan),
+                'Time_Elapsed': fund_score.get('time_elapsed', np.nan),
+                'Par_Bonus': fund_score.get('par_bonus', np.nan),
                 # Raw metrics
                 'Cap_Utilization': fund_score.get('cap_utilization', np.nan),
                 'Remaining_Cap_Pct': fund_score.get('remaining_cap_pct', np.nan),
@@ -1941,6 +1945,10 @@ def select_ecr_v2_regime_adaptive_new_methodology(df_universe, current_date, ser
     # Call core function with unpacked weights as positional arguments
     return _select_highest_new_ecr_core(df_universe, current_date, series, w_dbb, w_buffer, w_cap)
 
+
+
+
+
 def _select_highest_new_ecr_core(df_snapshot, current_date, series, w_dbb, w_buffer, w_cap, tracker=None, month=None):
     """Core ECR selection with optional tracking."""
 
@@ -2017,23 +2025,121 @@ def _select_highest_new_ecr_core(df_snapshot, current_date, series, w_dbb, w_buf
     return selected_fund
 
 
+def _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                              w_dbb, w_buffer, w_cap, w_par, time_shape,
+                              tracker=None, month=None):
+    """
+    ECR par-proximity selection core.
+
+    Composite formula:
+        composite = w_dbb * dbb_score
+                  + w_buffer * buffer_integrity
+                  + w_cap * cap_integrity
+                  + w_par * par_proximity * time_elapsed
+
+    NO time_scaling division — that responsibility moves to par_proximity × time_elapsed.
+
+    Parameters:
+        df_snapshot: DataFrame of available funds on current_date
+        current_date: Current backtest date
+        series: Fund series prefix ('F')
+        w_dbb, w_buffer, w_cap: Weights for the three v1 components (locked at 1,1,1 for Batch 11)
+        w_par: Weight on the par bonus
+        time_shape: 'linear', 'sqrt', or 'sq'
+        tracker: Optional RebalanceScoringTracker
+        month: Optional launch month string for tracker
+
+    Returns:
+        Selected fund ticker, or None if no scorable funds
+    """
+    available = df_snapshot[df_snapshot['Fund'].str.startswith(series)].copy()
+
+    if available.empty:
+        return None
+
+    fund_scores = []
+
+    for _, row in available.iterrows():
+        fund_name = row['Fund']
+
+        dbb_net = row.get('Downside Before Buffer Net', np.nan)
+        remaining_buffer = row.get('Remaining Buffer Net', np.nan)
+        original_buffer = row.get('Original Buffer Net', np.nan)
+        remaining_cap_net = row.get('Remaining Cap Net', np.nan)
+        original_cap_net = row.get('Original Cap Net', np.nan)
+        remaining_days = row.get('Remaining Outcome Days', np.nan)
+        par_proximity = row.get('par_proximity', np.nan)
+
+        # Component 1: DBB Score
+        dbb_score = np.exp(dbb_net * 5) if pd.notna(dbb_net) else 0
+
+        # Component 2: Buffer Integrity
+        if pd.notna(remaining_buffer) and pd.notna(original_buffer) and pd.notna(dbb_net):
+            buffer_integrity = max(0, (remaining_buffer + dbb_net)) / original_buffer \
+                if original_buffer > 0 else 0
+        else:
+            buffer_integrity = 0
+
+        # Component 3: Cap Integrity
+        if pd.notna(remaining_cap_net) and pd.notna(original_cap_net) and original_cap_net > 0:
+            cap_integrity = min(remaining_cap_net / original_cap_net, 1.0)
+        else:
+            cap_integrity = 0
+
+        # Component 4: Par bonus
+        time_elapsed = _compute_time_elapsed(remaining_days, time_shape)
+        par_prox_val = par_proximity if pd.notna(par_proximity) else 0
+        par_bonus = w_par * par_prox_val * time_elapsed
+
+        # Composite — no time_scaling division
+        composite = (w_dbb * dbb_score
+                     + w_buffer * buffer_integrity
+                     + w_cap * cap_integrity
+                     + par_bonus)
+
+        fund_scores.append({
+            'fund': fund_name,
+            'composite_score': composite,
+            'dbb_score': dbb_score,
+            'buffer_integrity': buffer_integrity,
+            'cap_integrity': cap_integrity,
+            'time_scaling': np.nan,  # not used in par_prox composite
+            'par_proximity': par_prox_val,
+            'time_elapsed': time_elapsed,
+            'par_bonus': par_bonus,
+            'cap_utilization': row.get('Cap_Utilization', np.nan),
+            'dbb_pct': dbb_net,
+            'remaining_buffer': remaining_buffer,
+            'original_buffer': original_buffer,
+            'remaining_days': remaining_days,
+            'total_days': 365,
+        })
+
+    if not fund_scores:
+        return None
+
+    selected = max(fund_scores, key=lambda x: x['composite_score'])
+    selected_fund = selected['fund']
+
+    if tracker is not None and month is not None:
+        weight_code = (str(w_dbb), str(w_buffer), str(w_cap))
+        weight_desc = f"Weights ({w_dbb},{w_buffer},{w_cap}) par={w_par} shape={time_shape}"
+        tracker.record_rebalance(current_date, month, (weight_code, weight_desc),
+                                 fund_scores, selected_fund)
+
+    return selected_fund
+
 
 def compute_ecr_scores(df_universe, series, w_dbb, w_buffer, w_cap):
     """
     Compute ECR composite scores for all funds in universe.
 
-    Extracted from _select_highest_new_ecr_core so both the selection
-    function and the ecr_percentile_trigger can call it without duplication.
-
-    Parameters:
-        df_universe: DataFrame of available funds on current date
-        series: Fund series letter (e.g. 'F')
-        w_dbb: Weight for DBB score
-        w_buffer: Weight for Buffer Integrity score
-        w_cap: Weight for Cap Integrity score
+    Used by triggers to evaluate the current fund's score and decide
+    whether to fire. Pure weighted sum of the three v1 components —
+    no time_scaling divisor (that role moves to par_proximity in selection).
 
     Returns:
-        dict: {fund_name: composite_score} for all scoreable funds
+        dict: {fund_name: composite_score}
     """
     available = df_universe[df_universe['Fund'].str.startswith(series)].copy()
 
@@ -2045,51 +2151,189 @@ def compute_ecr_scores(df_universe, series, w_dbb, w_buffer, w_cap):
     for _, row in available.iterrows():
         fund_name = row['Fund']
 
-        dbb_net             = row.get('Downside Before Buffer Net', np.nan)
-        remaining_buffer    = row.get('Remaining Buffer Net', np.nan)
-        original_buffer     = row.get('Original Buffer Net', np.nan)
-        remaining_cap_net   = row.get('Remaining Cap Net', np.nan)
-        original_cap_net    = row.get('Original Cap Net', np.nan)
-        remaining_days      = row.get('Remaining Outcome Days', np.nan)
+        dbb_net = row.get('Downside Before Buffer Net', np.nan)
+        remaining_buffer = row.get('Remaining Buffer Net', np.nan)
+        original_buffer = row.get('Original Buffer Net', np.nan)
+        remaining_cap_net = row.get('Remaining Cap Net', np.nan)
+        original_cap_net = row.get('Original Cap Net', np.nan)
 
-        # DBB Score: EXP(dbb_net * 5)
+        # DBB Score
         dbb_score = np.exp(dbb_net * 5) if pd.notna(dbb_net) else 0
 
-        # Buffer Integrity: MAX(0, rem_buffer_net + dbb_net) / orig_buffer_net
+        # Buffer Integrity
         if pd.notna(remaining_buffer) and pd.notna(original_buffer) and pd.notna(dbb_net):
-            buffer_integrity = max(0, (remaining_buffer + dbb_net)) / original_buffer if original_buffer > 0 else 0
+            buffer_integrity = max(0, (remaining_buffer + dbb_net)) / original_buffer \
+                if original_buffer > 0 else 0
         else:
             buffer_integrity = 0
 
-        # Cap Integrity: MIN(rem_cap_net / orig_cap_net, 1)
+        # Cap Integrity
         if pd.notna(remaining_cap_net) and pd.notna(original_cap_net) and original_cap_net > 0:
             cap_integrity = min(remaining_cap_net / original_cap_net, 1.0)
         else:
             cap_integrity = 0
 
-        # ── Composite Score ───────────────────────────────────────────────────────────
-        weighted_sum = w_dbb * dbb_score + w_buffer * buffer_integrity + w_cap * cap_integrity
-
-        # ── Time Scaling (optional) ───────────────────────────────────────────────────
-        # Uncomment to apply time scaling as a divisor:
-        time_scaling = np.where(
-            ~np.isnan(remaining_days) & (remaining_days > 0),
-            1.0 - np.log(remaining_days / 365.0),
-            1.0
-        )
-        composite = np.where(time_scaling != 0, weighted_sum / time_scaling, 0.0)
-
-        # ── Delta Scaling (optional — requires delta column in pipeline) ──────────────
-        # composite = weighted_sum * np.log(1 + delta)   # LN(1 + delta) multiplier
-        # composite = weighted_sum * delta               # raw delta multiplier
-
-        # ── No scaling (current) ─────────────────────────────────────────────────────
-        # composite = weighted_sum
+        # Composite — pure weighted sum, no time scaling
+        composite = w_dbb * dbb_score + w_buffer * buffer_integrity + w_cap * cap_integrity
 
         scores[fund_name] = composite
 
     return scores
 
+def _compute_time_elapsed(remaining_days, shape):
+    """
+    Compute time-elapsed factor for the par_proximity bonus.
+
+    All three shapes are 0 when remaining_days = 365 (fund just rolled)
+    and 1 when remaining_days = 0 (fund at maturity).
+
+    Parameters:
+        remaining_days: Days remaining in outcome period (float or array)
+        shape: 'linear', 'sqrt', or 'sq'
+
+    Returns:
+        Float in [0, 1]
+    """
+    if pd.isna(remaining_days) or remaining_days <= 0:
+        return 1.0
+
+    base = max(0.0, 1.0 - remaining_days / 365.0)
+
+    if shape == 'linear':
+        return base
+    elif shape == 'sqrt':
+        return np.sqrt(base)
+    elif shape == 'sq':
+        return base ** 2
+    else:
+        raise ValueError(f"Unknown time_shape: {shape}. Use 'linear', 'sqrt', or 'sq'.")
+
+
+# =============================================================================
+# Batch 11: Par Proximity Selection Wrappers
+# =============================================================================
+# Locked weights: w_dbb=1, w_buffer=1, w_cap=1
+# Varied parameters: w_par × time_shape
+
+def select_ecr_par_prox_w0p5_lin(df_snapshot, current_date, series='F',
+                                  df_regimes=None, tracker=None, month=None, **kwargs):
+    return _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                                     w_dbb=1, w_buffer=1, w_cap=1,
+                                     w_par=0.5, time_shape='linear',
+                                     tracker=tracker, month=month)
+
+def select_ecr_par_prox_w0p5_sqrt(df_snapshot, current_date, series='F',
+                                   df_regimes=None, tracker=None, month=None, **kwargs):
+    return _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                                     w_dbb=1, w_buffer=1, w_cap=1,
+                                     w_par=0.5, time_shape='sqrt',
+                                     tracker=tracker, month=month)
+
+def select_ecr_par_prox_w0p5_sq(df_snapshot, current_date, series='F',
+                                 df_regimes=None, tracker=None, month=None, **kwargs):
+    return _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                                     w_dbb=1, w_buffer=1, w_cap=1,
+                                     w_par=0.5, time_shape='sq',
+                                     tracker=tracker, month=month)
+
+def select_ecr_par_prox_w1_lin(df_snapshot, current_date, series='F',
+                                df_regimes=None, tracker=None, month=None, **kwargs):
+    return _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                                     w_dbb=1, w_buffer=1, w_cap=1,
+                                     w_par=1.0, time_shape='linear',
+                                     tracker=tracker, month=month)
+
+def select_ecr_par_prox_w1_sqrt(df_snapshot, current_date, series='F',
+                                 df_regimes=None, tracker=None, month=None, **kwargs):
+    return _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                                     w_dbb=1, w_buffer=1, w_cap=1,
+                                     w_par=1.0, time_shape='sqrt',
+                                     tracker=tracker, month=month)
+
+def select_ecr_par_prox_w1_sq(df_snapshot, current_date, series='F',
+                               df_regimes=None, tracker=None, month=None, **kwargs):
+    return _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                                     w_dbb=1, w_buffer=1, w_cap=1,
+                                     w_par=1.0, time_shape='sq',
+                                     tracker=tracker, month=month)
+
+def select_ecr_par_prox_w1p5_lin(df_snapshot, current_date, series='F',
+                                  df_regimes=None, tracker=None, month=None, **kwargs):
+    return _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                                     w_dbb=1, w_buffer=1, w_cap=1,
+                                     w_par=1.5, time_shape='linear',
+                                     tracker=tracker, month=month)
+
+def select_ecr_par_prox_w1p5_sqrt(df_snapshot, current_date, series='F',
+                                   df_regimes=None, tracker=None, month=None, **kwargs):
+    return _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                                     w_dbb=1, w_buffer=1, w_cap=1,
+                                     w_par=1.5, time_shape='sqrt',
+                                     tracker=tracker, month=month)
+
+def select_ecr_par_prox_w1p5_sq(df_snapshot, current_date, series='F',
+                                 df_regimes=None, tracker=None, month=None, **kwargs):
+    return _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                                     w_dbb=1, w_buffer=1, w_cap=1,
+                                     w_par=1.5, time_shape='sq',
+                                     tracker=tracker, month=month)
+
+def select_ecr_par_prox_w2_lin(df_snapshot, current_date, series='F',
+                                df_regimes=None, tracker=None, month=None, **kwargs):
+    return _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                                     w_dbb=1, w_buffer=1, w_cap=1,
+                                     w_par=2.0, time_shape='linear',
+                                     tracker=tracker, month=month)
+
+def select_ecr_par_prox_w2_sqrt(df_snapshot, current_date, series='F',
+                                 df_regimes=None, tracker=None, month=None, **kwargs):
+    return _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                                     w_dbb=1, w_buffer=1, w_cap=1,
+                                     w_par=2.0, time_shape='sqrt',
+                                     tracker=tracker, month=month)
+
+def select_ecr_par_prox_w2_sq(df_snapshot, current_date, series='F',
+                               df_regimes=None, tracker=None, month=None, **kwargs):
+    return _select_ecr_par_prox_core(df_snapshot, current_date, series,
+                                     w_dbb=1, w_buffer=1, w_cap=1,
+                                     w_par=2.0, time_shape='sq',
+                                     tracker=tracker, month=month)
+
+# =============================================================================
+# Batch 11: w_par = 2.5 variants
+# =============================================================================
+
+def select_ecr_par_prox_w2p5_lin(df_snapshot, current_date, series,
+                                  df_regimes=None, tracker=None, month=None):
+    """ECR par-proximity, w_par=2.5, time_shape=linear."""
+    return _select_ecr_par_prox_core(
+        df_snapshot, current_date, series,
+        w_dbb=1, w_buffer=1, w_cap=1,
+        w_par=2.5, time_shape='linear',
+        tracker=tracker, month=month,
+    )
+
+
+def select_ecr_par_prox_w2p5_sqrt(df_snapshot, current_date, series,
+                                   df_regimes=None, tracker=None, month=None):
+    """ECR par-proximity, w_par=2.5, time_shape=sqrt."""
+    return _select_ecr_par_prox_core(
+        df_snapshot, current_date, series,
+        w_dbb=1, w_buffer=1, w_cap=1,
+        w_par=2.5, time_shape='sqrt',
+        tracker=tracker, month=month,
+    )
+
+
+def select_ecr_par_prox_w2p5_sq(df_snapshot, current_date, series,
+                                 df_regimes=None, tracker=None, month=None):
+    """ECR par-proximity, w_par=2.5, time_shape=sq."""
+    return _select_ecr_par_prox_core(
+        df_snapshot, current_date, series,
+        w_dbb=1, w_buffer=1, w_cap=1,
+        w_par=2.5, time_shape='sq',
+        tracker=tracker, month=month,
+    )
 
 # Selection registry for dynamic lookup
 SELECTION_REGISTRY = {
@@ -2157,6 +2401,23 @@ SELECTION_REGISTRY = {
     'select_highest_new_ecr_composite_101': select_highest_new_ecr_composite_101,
     'select_highest_new_ecr_composite_221': select_highest_new_ecr_composite_221,
     'select_highest_new_ecr_composite_110': select_highest_new_ecr_composite_110,
+
+    # Batch 11: Par Proximity Selection Functions
+    'select_ecr_par_prox_w0p5_lin': select_ecr_par_prox_w0p5_lin,
+    'select_ecr_par_prox_w0p5_sqrt': select_ecr_par_prox_w0p5_sqrt,
+    'select_ecr_par_prox_w0p5_sq': select_ecr_par_prox_w0p5_sq,
+    'select_ecr_par_prox_w1_lin': select_ecr_par_prox_w1_lin,
+    'select_ecr_par_prox_w1_sqrt': select_ecr_par_prox_w1_sqrt,
+    'select_ecr_par_prox_w1_sq': select_ecr_par_prox_w1_sq,
+    'select_ecr_par_prox_w1p5_lin': select_ecr_par_prox_w1p5_lin,
+    'select_ecr_par_prox_w1p5_sqrt': select_ecr_par_prox_w1p5_sqrt,
+    'select_ecr_par_prox_w1p5_sq': select_ecr_par_prox_w1p5_sq,
+    'select_ecr_par_prox_w2_lin': select_ecr_par_prox_w2_lin,
+    'select_ecr_par_prox_w2_sqrt': select_ecr_par_prox_w2_sqrt,
+    'select_ecr_par_prox_w2_sq': select_ecr_par_prox_w2_sq,
+    'select_ecr_par_prox_w2p5_lin':  select_ecr_par_prox_w2p5_lin,
+    'select_ecr_par_prox_w2p5_sqrt': select_ecr_par_prox_w2p5_sqrt,
+    'select_ecr_par_prox_w2p5_sq':   select_ecr_par_prox_w2p5_sq,
 }
 
 

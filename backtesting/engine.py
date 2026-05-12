@@ -42,6 +42,7 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
     # print(f"\n{'=' * 80}")
     # print(f"Running backtest: {launch_month} | {trigger_config['type']} | {selection_func.__name__}")
     # print(f"{'=' * 80}")
+    print(f"  → Starting: {launch_month} | {trigger_config['type']} | {selection_func.__name__}")
 
     tracker = RebalanceScoringTracker()
 
@@ -164,6 +165,13 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
         ecr_w_buffer = int(trigger_params.get('weight_code', '111')[1])
         ecr_w_cap = int(trigger_params.get('weight_code', '111')[2])
         ecr_pct_threshold = trigger_params['percentile_threshold']
+        ecr_min_holding = trigger_params.get('min_holding_days', 22)
+
+    elif trigger_type == 'ecr_rank_threshold':
+        ecr_w_dbb = int(trigger_params.get('weight_code', '111')[0])
+        ecr_w_buffer = int(trigger_params.get('weight_code', '111')[1])
+        ecr_w_cap = int(trigger_params.get('weight_code', '111')[2])
+        ecr_rank_threshold = trigger_params['rank_threshold']
         ecr_min_holding = trigger_params.get('min_holding_days', 22)
 
     # Main backtest loop
@@ -355,6 +363,27 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
                 if triggered:
                     trigger_reason = f"ecr_pct_rank<{ecr_pct_threshold}th"
 
+        elif trigger_type == 'ecr_rank_threshold':
+            df_universe_ecr = df_enriched[
+                (df_enriched['Date'] == current_date) &
+                (df_enriched['Fund'].str.startswith(series))
+                ].copy()
+
+            if not df_universe_ecr.empty:
+                triggered = trigger_func(
+                    current_fund=current_fund,
+                    df_universe=df_universe_ecr,
+                    series=series,
+                    w_dbb=ecr_w_dbb,
+                    w_buffer=ecr_w_buffer,
+                    w_cap=ecr_w_cap,
+                    rank_threshold=ecr_rank_threshold,
+                    min_holding_days=ecr_min_holding,
+                    days_since_rebalance=days_since_rebalance
+                )
+                if triggered:
+                    trigger_reason = f"ecr_rank>{ecr_rank_threshold}"
+
         else:
             # All other threshold-based triggers
             threshold = trigger_params['threshold']
@@ -366,7 +395,8 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
             if trigger_type in ('ecr_percentile_trigger',
                                 'ecr_score_threshold',
                                 'ecr_relative_spread',
-                                'ecr_percentile_rank'):
+                                'ecr_percentile_rank',
+                                'ecr_rank_threshold'):
                 df_universe = df_universe_ecr
 
             else:
@@ -377,7 +407,7 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
 
             if not df_universe.empty:
                 # Record outgoing fund score before selection
-                if trigger_type in ('ecr_score_threshold', 'ecr_relative_spread', 'ecr_percentile_rank'):
+                if trigger_type in ('ecr_score_threshold', 'ecr_relative_spread', 'ecr_percentile_rank', 'ecr_rank_threshold'):
                     all_scores = compute_ecr_scores(df_universe, series, ecr_w_dbb, ecr_w_buffer, ecr_w_cap)
                     outgoing_score = all_scores.get(current_fund, np.nan)
                     best_score = max(all_scores.values()) if all_scores else np.nan
@@ -411,7 +441,7 @@ def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
                     num_trades += 1
                     days_since_rebalance = 0
 
-                    if trigger_type in ('ecr_percentile_trigger', 'ecr_score_threshold', 'ecr_percentile_rank'):
+                    if trigger_type in ('ecr_percentile_trigger', 'ecr_score_threshold', 'ecr_percentile_rank', 'ecr_rank_threshold'):
                         scores = compute_ecr_scores(df_universe, series, ecr_w_dbb, ecr_w_buffer, ecr_w_cap)
                         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
                         print(f"    *** TRADE {num_trades} on {current_date.strftime('%Y-%m-%d')}: "

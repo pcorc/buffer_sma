@@ -53,6 +53,7 @@ MONTH_MAP = {
 # Launch months
 LAUNCH_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
                  'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+LAUNCH_MONTHS = ['FEB','SEP', ]
 
 # For testing, can use subset
 # LAUNCH_MONTHS = ['MAR', 'JUN', 'SEP', 'DEC']

@@ -455,6 +455,65 @@ def trigger_ecr_percentile_rank(
 
     return current_score < pct_cutoff
 
+
+def trigger_ecr_rank_threshold(
+        current_fund,
+        df_universe,
+        series,
+        w_dbb, w_buffer, w_cap,
+        rank_threshold,
+        min_holding_days,
+        days_since_rebalance
+):
+    """
+    Trigger that fires when the current fund's ordinal rank in the universe
+    exceeds a threshold.
+
+    Ranks are 1-indexed with 1 = best score (highest ECR). Fires when
+    current_rank > rank_threshold.
+
+    Example: rank_threshold = 1.5 → fires when current_rank ≥ 2
+             (i.e. anytime the current fund is not the top-ranked fund)
+
+    Note: Uses v1 ECR composite via compute_ecr_scores (same as other
+    ecr_* triggers). Selection function — which may use par-proximity —
+    is called separately by the engine.
+
+    Parameters:
+        rank_threshold: float — fires when current_rank > threshold (1 = best)
+        min_holding_days: minimum trading days before trigger can fire
+        days_since_rebalance: trading days since last rebalance
+
+    Returns:
+        bool: True if trigger fires
+    """
+    if days_since_rebalance < min_holding_days:
+        return False
+
+    score_dict = compute_ecr_scores(df_universe, series, w_dbb, w_buffer, w_cap)
+
+    if not score_dict:
+        return False
+
+    current_score = score_dict.get(current_fund, np.nan)
+    if pd.isna(current_score):
+        return False
+
+    # Rank high-to-low (best score = rank 1)
+    sorted_funds = sorted(score_dict.items(), key=lambda x: x[1], reverse=True)
+    current_rank = next(
+        (i + 1 for i, (f, _) in enumerate(sorted_funds) if f == current_fund),
+        None
+    )
+
+    if current_rank is None:
+        return False
+
+    return current_rank > rank_threshold
+
+
+
+
 # Trigger registry for dynamic lookup
 TRIGGER_REGISTRY = {
     'rebalance_time_period': trigger_rebalance_time_period,
@@ -468,7 +527,7 @@ TRIGGER_REGISTRY = {
     'ecr_score_threshold': trigger_ecr_score_threshold,
     'buffer_utilization_threshold': trigger_buffer_utilization_threshold,
     'ecr_percentile_rank': trigger_ecr_percentile_rank,
-
+    'ecr_rank_threshold': trigger_ecr_rank_threshold,
 }
 
 

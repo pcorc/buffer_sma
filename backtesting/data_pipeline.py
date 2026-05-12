@@ -31,43 +31,34 @@ MIN_ANALYSIS_DATE = pd.Timestamp('2020-07-01')
 # PUBLIC API
 # ============================================================================
 
-def load_and_preprocess_all_data(fund_file, benchmark_file, roll_dates_file, series='F'):
+def load_and_preprocess_all_data(fund_file, benchmark_file, roll_dates_file, series='F', sigma=0.05):
     """
     Complete data pipeline: Load → Clean → Convert → Enrich
-    
-    This is the ONLY function you need to call to get all data ready for backtesting.
-    
+
     Parameters:
         fund_file: Path to fund CSV
         benchmark_file: Path to benchmark CSV
         roll_dates_file: Path to roll dates CSV
         series: Fund series to filter (default 'F')
-    
+        sigma: Standard deviation for par_proximity Gaussian (default 0.05)
+
     Returns:
-        df_enriched: Fund data with ALL metrics in DECIMAL format
+        df_enriched: Fund data with ALL metrics in DECIMAL format + par_proximity columns
         df_benchmarks: Benchmark data with daily returns
         roll_dates_dict: Roll dates by frequency
     """
-
-    # Step 1: Load raw CSVs
-
     df_raw = _load_fund_csv(fund_file, series)
     df_benchmarks = _load_benchmark_csv(benchmark_file)
     roll_dates_dict = _load_roll_dates(roll_dates_file)
-    
-    # Step 2: Convert ALL percentages to decimals
     df_clean = _convert_percentages_to_decimals(df_raw)
-    
-    # Step 3: Enrich with roll date metrics
     df_enriched = _enrich_with_roll_dates(df_clean, roll_dates_dict)
-    
-    # Step 4: Validate
+    df_enriched = _enrich_with_par_proximity(df_enriched, df_benchmarks, sigma)
     _validate_decimal_format(df_enriched)
-    
+
     print("\n" + "=" * 80)
     print("✅ DATA PIPELINE COMPLETE")
     print("=" * 80 + "\n")
-    
+
     return df_enriched, df_benchmarks, roll_dates_dict
 
 
@@ -366,6 +357,46 @@ def _get_anniversary_roll_dates(fund_ticker, monthly_roll_dates):
     
     return sorted(anniversary_dates)
 
+
+def _enrich_with_par_proximity(df, df_benchmarks, sigma):
+    """
+    Add par_proximity columns to enriched fund data.
+
+    Computes three new columns on every row:
+        - SPY_at_Roll_Date:           SPY closing price on the row's prev roll date
+        - spx_return_since_prev_roll: (current SPY / SPY at prev roll) - 1
+        - par_proximity:              Gaussian score, peaks at 1 when SPY is at par
+
+    Uses existing 'Roll_Date' column (assigned by _enrich_with_roll_dates) and
+    'Reference Asset Value (USD)' column (which IS SPY for F-series funds).
+
+    Parameters:
+        df: Enriched fund DataFrame (must have Roll_Date and Reference Asset Value columns)
+        df_benchmarks: Benchmark DataFrame with Date and SPY columns
+        sigma: Gaussian width parameter (e.g. 0.05 means ±5% SPX move is one sigma)
+
+    Returns:
+        df with three new columns appended
+    """
+    # Build SPY lookup keyed on Date → merge against Roll_Date
+    spy_lookup = df_benchmarks[['Date', 'SPY']].copy()
+    spy_lookup.columns = ['Roll_Date', 'SPY_at_Roll_Date']
+
+    df = df.merge(spy_lookup, on='Roll_Date', how='left')
+
+    # SPX return since previous roll (vectorized)
+    df['spx_return_since_prev_roll'] = (
+            df['Reference Asset Value (USD)'] / df['SPY_at_Roll_Date'] - 1
+    )
+
+    # Par proximity: Gaussian centered at zero return
+    df['par_proximity'] = np.exp(
+        -(df['spx_return_since_prev_roll'] ** 2) / (2 * sigma ** 2)
+    )
+
+    print(f"  ✅ Added par_proximity columns (sigma={sigma})")
+
+    return df
 
 # ============================================================================
 # STEP 4: VALIDATION

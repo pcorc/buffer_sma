@@ -27,7 +27,7 @@ import glob
 # CONFIGURATION — update these three paths
 # ============================================================================
 
-batch_10d_dir = Path('../output/backtest_results/batch_10d')
+batch_10d_dir = Path('../../output/backtest_results/batch_10d')
 matches = sorted(glob.glob(str(batch_10d_dir / 'batch10d_*.xlsx')))
 if not matches:
     raise FileNotFoundError(f'No batch 10d summary workbook found in {batch_10d_dir}')
@@ -35,7 +35,7 @@ SUMMARY_PATH = Path(matches[-1])
 
 CSV_PATH     = Path('output/backtest_results/batch_10c/batch_10c_daily_time_series.csv')
 SCORING_PATH = Path('output/backtest_results/batch_10c/batch_10c_rebalance_scoring.xlsx')
-OUTPUT_DIR   = Path('../output/backtest_results/batch_10c')
+OUTPUT_DIR   = Path('../../output/backtest_results/batch_10c')
 
 WEIGHT_COLORS = {
     '1,1,1': '#2166ac',

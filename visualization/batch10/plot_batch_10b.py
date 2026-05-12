@@ -235,13 +235,13 @@ def plot_month(ax, df, df_reg, month, pct_cols, baseline_col, full_size=False):
 def main():
     batcher = "batch_10b"
     csv_path    = Path('output/backtest_results/' + batcher + '/' + batcher + '_daily_time_series.csv')
-    regime_path = Path('../input_data/sp500_regimes.csv')
+    regime_path = Path('../../input_data/sp500_regimes.csv')
     output_dir  = Path('output/backtest_results/' + batcher)
 
     if not csv_path.exists():
         print(f'\n❌ CSV not found: {csv_path}')
         print('   Searching...')
-        for f in Path('../output').rglob(batcher + '_daily_time_series.csv'):
+        for f in Path('../../output').rglob(batcher + '_daily_time_series.csv'):
             print(f'   Found: {f}')
         return
 

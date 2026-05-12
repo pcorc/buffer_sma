@@ -8,7 +8,7 @@ from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils.dataframe import dataframe_to_rows
-
+from pathlib import Path
 
 def export_consolidated_workbook(results_list, summary_df, output_dir, run_name='backtest',
                                 df_regimes=None, regime_df=None, capture_ratios=None,
@@ -1201,11 +1201,26 @@ def extract_and_export_daily_nav(results_list, output_dir, batch_number, df_benc
             label        = f'{launch}_ECR_Spread_w{weight_code}_s{thresh_label}'
             print(f"  ✅ ECR Relative Spread (w={weight_code}, s={thresh})")
 
-        if trigger == 'ecr_percentile_rank':
-            weight_code = trigger_params.get('weight_code', '111')
-            pct = trigger_params.get('percentile_threshold', 50)
-            label = f'{launch}_ECR_PctRank_w{weight_code}_p{pct}'
-            print(f"  ✅ ECR Percentile Rank (w={weight_code}, p={pct}th)")
+        # ── Batch 11 — Par Proximity selection variants ──────────────────────
+        # Overrides the ecr_score_threshold label above when selection is par_prox.
+        # Trigger-agnostic: matches purely on selection function name.
+        if 'select_ecr_par_prox_' in selection:
+            parts = selection.replace('select_ecr_par_prox_', '').split('_')
+            w_part = parts[0]  # e.g. 'w1p5'
+            shape = parts[1]  # e.g. 'lin'
+            score_thresh = trigger_params.get('score_threshold', 1.5)
+            score_label = str(score_thresh).replace('.', 'p')
+            label = f'{launch}_ParProx_{w_part}_{shape}_score{score_label}'
+            print(f"  ✅ Par Proximity (w={w_part}, shape={shape}, score={score_thresh})")
+
+            # ── NEW: Batch 11 — v1 ECR baseline running under rank trigger ────────
+        if trigger == 'ecr_rank_threshold' and 'new_ecr_composite_' in selection:
+            parts = selection.split('_')
+            weight_code = next((p for p in parts if p.isdigit() and len(p) == 3), '111')
+            rank_thresh = trigger_params.get('rank_threshold', 1.5)
+            label = f'{launch}_ECRv1_Baseline_w{weight_code}_rank{rank_thresh}'
+            print(f"  ✅ Baseline ECR v1 ({weight_code}, rank={rank_thresh})")
+
 
         if label is None:
             label = f"{launch}_{trigger[:10]}_{selection[:15]}"
