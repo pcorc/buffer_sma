@@ -1,0 +1,2 @@
+threshold,avg_excess,std_excess,min_excess,max_excess,num_beating,total_months,pct_beating
+90%,3.86,4.84,-3.24,11.78,10,12,83.33333333333334
