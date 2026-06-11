@@ -35,7 +35,7 @@ from utils.exporters import export_main_consolidated_workbook, extract_and_expor
 from utils.date_utils import get_first_trading_day_of_month
 from visualization.performance_plots import generate_batch_visualizations
 
-BATCH_NUMBER = '11w2p5'  # Change this to run different batches (0-7)
+BATCH_NUMBER = '11'  # Change this to run different batches (0-7)
 
 
 def main():

@@ -1043,6 +1043,355 @@ def plot_overlay_month(launch_month, df_summary, df_rebal, df_nav):
     save(fig, f'batch_11_overlay_{launch_month}{filter_suffix()}.png')
 
 
+
+
+# ============================================================================
+# PLOT 7 — Per-month individual: ECR (linear, par 1.5, score 1.5) vs benchmarks
+# ============================================================================
+#
+# DROP-IN ADDITIONS for plot_batch_11_unified.py.
+# Paste this whole block in after plot_overlay_month (before the DISPATCH section).
+# It reuses existing module globals/helpers: parse_config, get_strategy_trades,
+# save, filter_suffix, plt, and the COLOR_* constants. Nothing existing is edited.
+#
+# Three wiring steps (see the message for exact lines):
+#   1. CONFIG:        W_PAR_FILTER = ['w1p5'] ; SHAPE_FILTER = ['lin'] ; INCLUDE_BASELINE = True
+#   2. PLOTS_TO_RUN:  add 'per_month_individual'
+#   3. PLOT_FUNCS:    'per_month_individual': plot_per_month_individual,
+# ============================================================================
+
+# Strategy this plot pins to. Change here if you ever want a different config.
+PERMONTH_SELECTION = 'select_ecr_par_prox_w1p5_lin'
+PERMONTH_SCORE_THRESHOLD = 1.5
+
+
+def _parse_score_threshold(tp):
+    """Pull score_threshold out of a trigger_params cell (dict or stringified dict)."""
+    if isinstance(tp, dict):
+        return tp.get('score_threshold')
+    if isinstance(tp, str):
+        try:
+            import ast
+            d = ast.literal_eval(tp)
+            return d.get('score_threshold') if isinstance(d, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def _permonth_strategy_col(df_nav, month, selection_algo, score_threshold):
+    """
+    Exact ParProx NAV column for one month, threshold-pinned.
+    Matches the generator label: {month}_ParProx_{w}_{shape}_score{label}_NAV
+    where label = str(score_threshold).replace('.', 'p'). Falls back to a prefix
+    match (with a warning) only if the exact threshold column is absent.
+    """
+    if df_nav is None:
+        return None
+    w, s = parse_config(selection_algo)            # ('w1p5', 'lin')
+    score_label = str(score_threshold).replace('.', 'p')   # 1.5 -> '1p5'
+    exact = f'{month}_ParProx_{w}_{s}_score{score_label}_NAV'
+    if exact in df_nav.columns:
+        return exact
+    cands = [c for c in df_nav.columns
+             if c.startswith(f'{month}_ParProx_{w}_{s}_') and c.endswith('_NAV')]
+    if cands:
+        print(f'  ⚠️  {month}: exact column {exact} not found; using {cands[0]} '
+              f'(threshold NOT pinned — verify)')
+        return cands[0]
+    return None
+
+
+def _permonth_baseline_col(df_nav, month):
+    """ECR-111 baseline NAV column. Batch 11 names it ECRv1_Baseline_*; older
+    runs used ECR_Score_*. Prefer the former, fall back to the latter."""
+    if df_nav is None:
+        return None
+    for prefix in (f'{month}_ECRv1_Baseline_', f'{month}_ECR_Score_'):
+        cands = [c for c in df_nav.columns
+                 if c.startswith(prefix) and c.endswith('_NAV')]
+        if cands:
+            return cands[0]
+    return None
+
+
+def _permonth_summary_row(df_summary, month, selection_algo, score_threshold):
+    """Summary row for (month, selection), pinned to the score threshold when
+    trigger_params is present; otherwise the single matching row."""
+    sub = df_summary[(df_summary['launch_month'] == month) &
+                     (df_summary['selection_algo'] == selection_algo)].copy()
+    if sub.empty:
+        return None
+    if 'trigger_params' in sub.columns:
+        pinned = sub[sub['trigger_params'].apply(_parse_score_threshold) == score_threshold]
+        if not pinned.empty:
+            sub = pinned
+    return sub.iloc[0]
+
+
+def _draw_permonth_panel(month, df_nav, df_rebal, summary_row, selection_algo,
+                         strat_col, spy_col, bufr_col, base_col, show_score):
+    """One figure for one month. show_score=True adds the held-fund ECR score
+    on a right twin axis with fund-ticker markers; False is NAV-only (clean)."""
+    fig, ax_nav = plt.subplots(figsize=(14, 7))
+
+    def _plot_nav(ax, col, **kw):
+        if col and col in df_nav.columns:
+            d = df_nav[['Date', col]].dropna()
+            if not d.empty:
+                ax.plot(d['Date'], d[col], **kw)
+
+    # Muted benchmark colors on the clean version; the TB scheme reads fine
+    # alongside the purple score line on the with-score version.
+    spy_c, bufr_c = (COLOR_SPY_TB, COLOR_BUFR_TB) if show_score else (COLOR_SPY, COLOR_BUFR)
+
+    _plot_nav(ax_nav, spy_col,  color=spy_c,  linewidth=1.4, alpha=0.85,
+              label='SPY', zorder=2)
+    _plot_nav(ax_nav, bufr_col, color=bufr_c, linewidth=1.4, linestyle='--',
+              alpha=0.85, label='BUFR', zorder=2)
+    _plot_nav(ax_nav, base_col, color=COLOR_BASELINE, linewidth=2.0, linestyle=':',
+              alpha=0.9, label='ECR 111 (baseline)', zorder=3)
+    _plot_nav(ax_nav, strat_col, color=COLOR_STRATEGY, linewidth=2.4,
+              label='ECR', zorder=5)
+
+    ax_nav.set_ylabel('NAV (rebased to 100)', fontsize=11, fontweight='bold')
+    ax_nav.set_xlabel('Date', fontsize=10)
+    ax_nav.grid(True, alpha=0.3)
+    ax_nav.tick_params(axis='x', rotation=30, labelsize=9)
+    ax_nav.set_facecolor('#fafafa')
+
+    if show_score:
+        ax_score = ax_nav.twinx()
+        trades_df = get_strategy_trades(df_rebal, month, selection_algo)
+        if not trades_df.empty:
+            ax_score.step(trades_df['Date'], trades_df['Composite_Score'],
+                          where='post', color=COLOR_ECR, linewidth=1.8, alpha=0.75,
+                          label='Held-Fund ECR Score', zorder=4)
+            ax_score.scatter(trades_df['Date'], trades_df['Composite_Score'],
+                             color=COLOR_ECR, s=45, zorder=5,
+                             edgecolor='white', linewidth=1.0)
+            for _, r in trades_df.iterrows():
+                ax_score.annotate(str(r['Fund'])[-3:],
+                                  (r['Date'], r['Composite_Score']),
+                                  textcoords='offset points', xytext=(0, 9),
+                                  ha='center', fontsize=7,
+                                  color=COLOR_ECR, fontweight='bold')
+        ax_score.set_ylabel('ECR Composite Score', color=COLOR_ECR,
+                            fontsize=10, fontweight='bold')
+        ax_score.tick_params(axis='y', labelcolor=COLOR_ECR)
+        ax_score.set_ylim(bottom=0)
+
+        l1, lab1 = ax_nav.get_legend_handles_labels()
+        l2, lab2 = ax_score.get_legend_handles_labels()
+        ax_nav.legend(l1 + l2, lab1 + lab2, loc='upper left',
+                      fontsize=8, framealpha=0.9, ncol=2)
+    else:
+        ax_nav.legend(loc='upper left', fontsize=9, framealpha=0.9)
+
+    metrics = ''
+    if summary_row is not None:
+        tr = summary_row.get('strategy_return', float('nan')) * 100
+        vb = summary_row.get('vs_bufr_excess', float('nan')) * 100
+        sh = summary_row.get('strategy_sharpe', float('nan'))
+        tn = summary_row.get('num_trades', float('nan'))
+        tn_str = f'{int(tn)}' if pd.notna(tn) else '—'
+        metrics = (f'  |  Return {tr:+.1f}%  |  vs BUFR {vb:+.2f}%'
+                   f'  |  Sharpe {sh:.2f}  |  Trades {tn_str}')
+
+    variant = 'with held-fund score' if show_score else 'NAV only'
+    ax_nav.set_title(
+        f'{month} Launch — ECR (linear, par 1.5, score 1.5) vs Benchmarks\n'
+        f'{variant}{metrics}',
+        fontsize=11, fontweight='bold'
+    )
+
+    plt.tight_layout()
+    suffix = 'withscore' if show_score else 'clean'
+    save(fig, f'batch_11_permonth_{month}_{suffix}{filter_suffix()}.png')
+
+
+def plot_per_month_individual(df_summary, df_rebal, df_nav, months_list):
+    """
+    For each launch month, one figure of the linear / par-1.5 / score-1.5 ECR
+    strategy against SPY, BUFR, and the ECR-111 baseline. Produces two batches:
+    a 'withscore' set (dual axis + selection markers) and a 'clean' NAV-only set.
+    selection = PERMONTH_SELECTION
+    score_threshold = PERMONTH_SCORE_THRESHOLD
+
+    if df_nav is None:
+        print('  ⚠️  No daily NAV CSV — skipping per_month_individual')
+        return
+    if not months_list:
+        print('  ⚠️  No months after filter — skipping per_month_individual')
+        return
+
+    made = 0
+    for month in months_list:
+        strat_col = _permonth_strategy_col(df_nav, month, selection, score_threshold)
+        if strat_col is None:
+            print(f'  ⚠️  {month}: no ParProx NAV column for {selection} — skipping')
+            continue
+
+        spy_col  = f'{month}_SPY_NAV'  if f'{month}_SPY_NAV'  in df_nav.columns else None
+        bufr_col = f'{month}_BUFR_NAV' if f'{month}_BUFR_NAV' in df_nav.columns else None
+        base_col = _permonth_baseline_col(df_nav, month)
+        row = _permonth_summary_row(df_summary, month, selection, score_threshold)
+
+        for show_score in (True, False):
+            _draw_permonth_panel(month, df_nav, df_rebal, row, selection,
+                                 strat_col, spy_col, bufr_col, base_col, show_score)
+            made += 1
+
+    if made == 0:
+        print('  ⚠️  per_month_individual produced no figures — check filters/columns')
+
+# ============================================================================
+# PLOT 7 (v2) — Per-month, SINGLE pinned strategy
+#   time shape = linear | par weight = 1.5 | score threshold = 1.5
+#   (select_ecr_par_prox_w1p5_lin, score 1.5)
+#
+# Self-contained: filters to the target strategy internally, derives its month
+# list straight from the NAV columns, and does NOT rely on the global
+# W_PAR_FILTER / SHAPE_FILTER / apply_filters. Does NOT plot the ECR-111 baseline.
+#
+# Drop-in for plot_batch_11_unified.py — paste after plot_overlay_month.
+# Reuses existing infra only: plt, pd, get_strategy_trades, save, COLOR_* consts.
+#
+# Wire-up:
+#   PLOT_FUNCS:    'per_month_v2': plot_per_month_v2,
+#   PLOTS_TO_RUN:  ['per_month_v2']
+# ============================================================================
+
+V2_W_PAR           = 'w1p5'
+V2_SHAPE           = 'lin'
+V2_SCORE_THRESHOLD = 1.5
+V2_SELECTION       = f'select_ecr_par_prox_{V2_W_PAR}_{V2_SHAPE}'   # select_ecr_par_prox_w1p5_lin
+
+
+def _v2_score_threshold(tp):
+    """score_threshold out of a trigger_params cell (dict or stringified dict)."""
+    if isinstance(tp, dict):
+        return tp.get('score_threshold')
+    if isinstance(tp, str):
+        try:
+            import ast
+            d = ast.literal_eval(tp)
+            return d.get('score_threshold') if isinstance(d, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def plot_per_month_v2(df_summary, df_rebal, df_nav, months_list=None):
+    """
+    One figure per launch month for the linear / par-1.5 / score-1.5 ECR strategy
+    against SPY and BUFR only (no ECR-111 baseline). Two batches per month:
+    '_withscore' (dual axis + held-fund score markers) and '_clean' (NAV only).
+    """
+    if df_nav is None:
+        print('  ⚠️  v2: no daily NAV CSV — skipping')
+        return
+
+    score_label = str(V2_SCORE_THRESHOLD).replace('.', 'p')              # '1p5'
+    nav_suffix  = f'_ParProx_{V2_W_PAR}_{V2_SHAPE}_score{score_label}_NAV'
+
+    # Months that actually have this strategy's NAV column.
+    months = sorted({c[:-len(nav_suffix)] for c in df_nav.columns
+                     if c.endswith(nav_suffix)})
+    if months_list:                                  # respect a MONTHS subset if one came through
+        months = [m for m in months if m in set(months_list)]
+
+    if not months:
+        print(f'  ⚠️  v2: no columns ending *{nav_suffix} — nothing to plot')
+        return
+
+    def _summary_row(month):
+        if 'launch_month' not in df_summary.columns or 'selection_algo' not in df_summary.columns:
+            return None
+        sub = df_summary[(df_summary['launch_month'] == month) &
+                         (df_summary['selection_algo'] == V2_SELECTION)].copy()
+        if sub.empty:
+            return None
+        if 'trigger_params' in sub.columns:
+            pinned = sub[sub['trigger_params'].apply(_v2_score_threshold) == V2_SCORE_THRESHOLD]
+            if not pinned.empty:
+                sub = pinned
+        return sub.iloc[0]
+
+    def _draw(month, show_score):
+        strat_col = f'{month}{nav_suffix}'
+        spy_col   = f'{month}_SPY_NAV'  if f'{month}_SPY_NAV'  in df_nav.columns else None
+        bufr_col  = f'{month}_BUFR_NAV' if f'{month}_BUFR_NAV' in df_nav.columns else None
+        row = _summary_row(month)
+
+        fig, ax = plt.subplots(figsize=(14, 7))
+        ax.set_facecolor('#fafafa')
+
+        def line(col, **kw):
+            if col and col in df_nav.columns:
+                d = df_nav[['Date', col]].dropna()
+                if not d.empty:
+                    ax.plot(d['Date'], d[col], **kw)
+
+        spy_c, bufr_c = (COLOR_SPY_TB, COLOR_BUFR_TB) if show_score else (COLOR_SPY, COLOR_BUFR)
+        line(spy_col,  color=spy_c,  linewidth=1.4, alpha=0.85, label='SPY', zorder=2)
+        line(bufr_col, color=bufr_c, linewidth=1.4, linestyle='--', alpha=0.85,
+             label='BUFR', zorder=2)
+        line(strat_col, color=COLOR_STRATEGY, linewidth=2.4, label='ECR', zorder=5)
+
+        ax.set_ylabel('NAV (rebased to 100)', fontsize=11, fontweight='bold')
+        ax.set_xlabel('Date', fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='x', rotation=30, labelsize=9)
+
+        if show_score:
+            ax2 = ax.twinx()
+            trades_df = get_strategy_trades(df_rebal, month, V2_SELECTION)
+            if not trades_df.empty:
+                ax2.step(trades_df['Date'], trades_df['Composite_Score'], where='post',
+                         color=COLOR_ECR, linewidth=1.8, alpha=0.75,
+                         label='Held-Fund ECR Score', zorder=4)
+                ax2.scatter(trades_df['Date'], trades_df['Composite_Score'],
+                            color=COLOR_ECR, s=45, zorder=5, edgecolor='white', linewidth=1.0)
+                for _, r in trades_df.iterrows():
+                    ax2.annotate(str(r['Fund'])[-3:], (r['Date'], r['Composite_Score']),
+                                 textcoords='offset points', xytext=(0, 9), ha='center',
+                                 fontsize=7, color=COLOR_ECR, fontweight='bold')
+            ax2.set_ylabel('ECR Composite Score', color=COLOR_ECR, fontsize=10, fontweight='bold')
+            ax2.tick_params(axis='y', labelcolor=COLOR_ECR)
+            ax2.set_ylim(bottom=0)
+            l1, lab1 = ax.get_legend_handles_labels()
+            l2, lab2 = ax2.get_legend_handles_labels()
+            ax.legend(l1 + l2, lab1 + lab2, loc='upper left', fontsize=8, framealpha=0.9, ncol=2)
+        else:
+            ax.legend(loc='upper left', fontsize=9, framealpha=0.9)
+
+        metrics = ''
+        if row is not None:
+            tr = row.get('strategy_return', float('nan')) * 100
+            vb = row.get('vs_bufr_excess', float('nan')) * 100
+            sh = row.get('strategy_sharpe', float('nan'))
+            tn = row.get('num_trades', float('nan'))
+            tn_str = f'{int(tn)}' if pd.notna(tn) else '—'
+            metrics = (f'  |  Return {tr:+.1f}%  |  vs BUFR {vb:+.2f}%'
+                       f'  |  Sharpe {sh:.2f}  |  Trades {tn_str}')
+
+        variant = 'with held-fund score' if show_score else 'NAV only'
+        ax.set_title(f'{month} Launch — ECR (linear, par 1.5, score 1.5) vs SPY & BUFR\n'
+                     f'{variant}{metrics}', fontsize=11, fontweight='bold')
+
+        plt.tight_layout()
+        tag = 'withscore' if show_score else 'clean'
+        save(fig, f'batch_11_permonth_v2_{month}_{tag}_w1p5_lin_t1p5.png')
+
+    for month in months:
+        for show_score in (True, False):
+            _draw(month, show_score)
+
+    print(f'  ✅ v2: plotted {len(months)} month(s) × 2 variants ({", ".join(months)})')
+
+
+
 # ============================================================================
 # DISPATCH
 # ============================================================================
@@ -1054,7 +1403,12 @@ PLOT_FUNCS = {
     'score_summary':           plot_score_summary,
     'top_bottom_strategies':   plot_top_bottom_strategies,
     'overlay_per_month':       plot_overlay_per_month,
+    'per_month_individual':    plot_per_month_individual,
+    'per_month_v2': plot_per_month_v2,
+
 }
+
+PLOTS_TO_RUN = ['per_month_v2']
 
 
 # ============================================================================

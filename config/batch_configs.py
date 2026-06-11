@@ -629,6 +629,10 @@ def get_batch_11_configs():
     launch_months = ['FEB', 'JUN', 'SEP', ]
     launch_months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
                      'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+    launch_months = ['FEB', 'JUN', 'JUL', 'SEP', ]
+
+    w_par_values = [(1.5, '1p5')]  # was the full 0.5/1.0/1.5/2.0 list
+    time_shapes = ['lin']  # was ['lin', 'sqrt', 'sq']
 
     min_holding_days = 22
     score_threshold = 1.5
