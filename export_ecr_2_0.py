@@ -46,7 +46,7 @@ import numpy as np
 import pandas as pd
 
 from export_latest_ecr import fetch_main_table_excel, parse_main_table
-from update_input_data import fetch_fund_history, format_date_mdy
+from update_input_data import fetch_fund_history
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
@@ -189,35 +189,59 @@ def validate_against_workbook(path):
 # Data retrieval (reuses the verified fetch machinery)
 # ============================================================================
 
-def fetch_raw(start, end):
+def _fetch_one(ticker, start, end, meta):
+    """Fetch one fund's window rows, or None if it has no data in range."""
+    hist = fetch_fund_history(ticker, start - pd.Timedelta(days=1))
+    hist = (hist.sort_values(["Date", "Remaining Outcome Days"])
+                .drop_duplicates("Date", keep="last"))
+    win = hist[(hist["Date"] >= start) & (hist["Date"] <= end)].copy()
+    if win.empty:
+        return None
+    win["Strategy Type"] = meta.get(ticker, {}).get("strategy_type")
+    win["Series"] = meta.get(ticker, {}).get("series")
+    return win
+
+
+def fetch_raw(start, end, retry_rounds=2):
     """Assemble the raw FT frame (percent units) for all funds across
-    [start, end], roll-aware, with Strategy Type / Series attached."""
+    [start, end], roll-aware, with Strategy Type / Series attached.
+
+    Funds that error (transient network blips, nsid pulled mid-roll) are
+    retried in follow-up rounds so a single hiccup never silently drops a
+    fund from a backfill."""
     funds = parse_main_table(fetch_main_table_excel())
     meta = funds.set_index("ticker")[["strategy_type", "series"]].to_dict("index")
     print(f"Fund universe: {len(funds)} tickers")
 
-    frames, failures = [], []
-    for i, ticker in enumerate(funds["ticker"], start=1):
-        try:
-            hist = fetch_fund_history(ticker, start - pd.Timedelta(days=1))
-            hist = (hist.sort_values(["Date", "Remaining Outcome Days"])
-                        .drop_duplicates("Date", keep="last"))
-            win = hist[(hist["Date"] >= start) & (hist["Date"] <= end)].copy()
-            if win.empty:
-                failures.append(ticker)
-                continue
-            win["Strategy Type"] = meta.get(ticker, {}).get("strategy_type")
-            win["Series"] = meta.get(ticker, {}).get("series")
-            frames.append(win)
-            time.sleep(0.4)
-        except Exception as err:  # noqa: BLE001
-            print(f"  {ticker}: ❌ {err}")
-            failures.append(ticker)
+    frames = []
+    pending = list(funds["ticker"])
+    no_data = []  # genuinely empty in range (e.g. mid-roll, no nsid) — not retryable
+    for attempt in range(retry_rounds + 1):
+        if not pending:
+            break
+        if attempt > 0:
+            print(f"  retry round {attempt}: {len(pending)} fund(s) — {', '.join(pending)}")
+            time.sleep(5)
+        errored = []
+        for ticker in pending:
+            try:
+                win = _fetch_one(ticker, start, end, meta)
+                if win is None:
+                    no_data.append(ticker)
+                else:
+                    frames.append(win)
+                time.sleep(0.4)
+            except Exception as err:  # noqa: BLE001 - retry transient failures next round
+                print(f"  {ticker}: ❌ {err}")
+                errored.append(ticker)
+        pending = errored
 
     if not frames:
         raise SystemExit("❌ Nothing downloaded.")
-    if failures:
-        print(f"⚠️  No data for: {', '.join(failures)}")
+    if pending:
+        print(f"⚠️  Failed after retries: {', '.join(pending)}")
+    if no_data:
+        print(f"⚠️  No rows in range (mid-roll / no nsid): {', '.join(no_data)}")
     return pd.concat(frames, ignore_index=True)
 
 
@@ -262,7 +286,8 @@ def main():
     print(final.groupby("date").size().to_dict() if start != end else
           f"ecr_2_0 range: {final['ecr_2_0'].min():.3f} – {final['ecr_2_0'].max():.3f}")
 
-    final["date"] = final["date"].map(format_date_mdy)
+    # ISO 8601 dates for unambiguous SQL import (DATE columns expect YYYY-MM-DD).
+    final["date"] = pd.to_datetime(final["date"]).dt.strftime("%Y-%m-%d")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     xlsx_path = OUTPUT_DIR / f"ecr_2_0_{tag}.xlsx"
     csv_path = OUTPUT_DIR / f"ecr_2_0_{tag}.csv"
