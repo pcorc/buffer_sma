@@ -41,6 +41,10 @@ def parser():
     p.add_argument('--buffer-metric', choices=['buffer_integrity', 'dbb', 'cap_integrity'])
     p.add_argument('--metric-floor', type=float, help='Fraction of ideal fresh component score 1, e.g. 0.8')
     p.add_argument('--buffer-drop', type=float)
+    for name in ('confirmation_reviews', 'reentry_cooldown_days', 'max_replacements_per_review'):
+        p.add_argument('--' + name.replace('_', '-'), type=int)
+    for name in ('min_selection_improvement', 'entry_metric_margin', 'max_turnover_per_review', 'weight_band'):
+        p.add_argument('--' + name.replace('_', '-'), type=float)
     for field in fields(ScoreConfig):
         p.add_argument('--' + field.name.replace('_', '-'), type=float)
     p.add_argument('--no-audit', action='store_true', help='Omit all-candidate table; keep diagnostics/decisions')

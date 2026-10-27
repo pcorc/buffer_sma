@@ -6,7 +6,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from config.settings import BacktestConfig, MONTHS, ScoreConfig
+from config.settings import BacktestConfig, MONTHS, ScoreConfig, turnover_controls_enabled
 from core.scoring import score_funds
 from backtesting.schedule import review_dates
 from core.selection import rank_candidates, selection_panel
@@ -103,7 +103,7 @@ def _start_index(data, cohort, config):
 
 
 def simulate(data: PreparedData, config=BacktestConfig()):
-    if config.portfolio_size > 1:
+    if config.portfolio_size > 1 or turnover_controls_enabled(config):
         from backtesting.portfolio import simulate_portfolio
         return simulate_portfolio(data, config)
     model_name = 'ecr-ar-v1'

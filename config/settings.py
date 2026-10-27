@@ -50,8 +50,33 @@ class BacktestConfig:
     buffer_metric: str = 'buffer_integrity'
     buffer_drop: float = 0.20
     metric_floor: float = 0.80
+    confirmation_reviews: int = 1
+    min_selection_improvement: float = 0.0
+    entry_metric_margin: float = 0.0
+    reentry_cooldown_days: int = 0
+    max_replacements_per_review: int = 0
+    max_turnover_per_review: float = 1.0
+    weight_band: float | None = None
 
     def __post_init__(self):
+        for name in ('confirmation_reviews', 'reentry_cooldown_days', 'max_replacements_per_review'):
+            value = getattr(self, name)
+            minimum = 1 if name == 'confirmation_reviews' else 0
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise ValueError(f'{name} must be an integer >= {minimum}')
+        for name in ('min_selection_improvement', 'entry_metric_margin'):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f'{name} must be finite and nonnegative')
+        if self.entry_metric_margin and (self.trigger != 'metric_floor' or self.metric_floor + self.entry_metric_margin > 1):
+            raise ValueError('Entry margin requires a metric-floor trigger and floor + margin <= 1')
+        if not math.isfinite(self.max_turnover_per_review) or not 0 < self.max_turnover_per_review <= 1:
+            raise ValueError('max_turnover_per_review must be in (0, 1]')
+        if self.weight_band is not None:
+            if not math.isfinite(self.weight_band) or not 0 <= self.weight_band <= 1:
+                raise ValueError('weight_band must be None or a fraction in [0, 1]')
+            if self.portfolio_size < 2:
+                raise ValueError('Weight bands require at least two funds')
         if not isinstance(self.client_name, str) or not self.client_name.strip():
             raise ValueError('client_name must be a nonempty string')
         if isinstance(self.portfolio_size, bool) or not isinstance(self.portfolio_size, int) or not 1 <= self.portfolio_size <= 12:
@@ -88,3 +113,17 @@ class BacktestConfig:
             raise ValueError('cohorts must be nonempty and unique')
         if any(c not in MONTHS for c in self.cohorts):
             raise ValueError('unknown cohort')
+
+
+def turnover_controls_enabled(config):
+    return (config.confirmation_reviews > 1 or config.min_selection_improvement > 0
+            or config.entry_metric_margin > 0 or config.reentry_cooldown_days > 0
+            or config.max_replacements_per_review > 0 or config.max_turnover_per_review < 1
+            or config.weight_band is not None)
+
+
+def replacement_controls_enabled(config):
+    # Weight bands and confirmation must not independently change candidate assignment.
+    return (config.min_selection_improvement > 0 or config.entry_metric_margin > 0
+            or config.reentry_cooldown_days > 0 or config.max_replacements_per_review > 0
+            or config.max_turnover_per_review < 1)

@@ -253,3 +253,25 @@ no-op selections, timing, insufficient-universe behavior and risk metrics.
 The notebook loads a named client preset and compares N/floor combinations.
 Running without `--config`, or using `config/ecr.json`, uses workbook-parity
 research defaults (including `<=`), rather than either named client preset.
+
+## Conservative scenario library and turnover controls
+
+The app's preset selector includes 34 UCITS research variants for 3- and 5-fund
+portfolios, plus the existing clients. Use **Turnover & weight controls** to set
+review confirmation, a minimum score improvement, a replacement entry margin,
+repurchase cooldown, replacement count, turnover budget and optional weight bands.
+All default to preserving the original behavior. Weight bands trigger a reset
+around 1/N at scheduled reviews, subject to the shared turnover budget; they are
+not hard daily weight caps. Excel includes the executed-trade and weight-review
+ledgers, including deferred actions.
+
+Run all 35 comparisons (including the single-ticker reference) with:
+
+```bash
+python scripts/run_conservative_suite.py
+```
+
+See [conservative research](documents/conservative-research.md) for every preset,
+exact accounting, CLI examples, quarterly-outcome scoring proposals and tradeoffs.
+The supplied dataset still represents annual F-series outcome structures; a
+quarterly review cadence does not change their outcome horizon.

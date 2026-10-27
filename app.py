@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from backtesting.engine import simulate
+from backtesting.scenarios import conservative_suite
 from config.settings import BacktestConfig, MONTHS, ScoreConfig
 from studio.service import (CADENCES, METRICS, SELECTIONS, SCHEDULE_NOTES, build_downloads,
                             config_json, load_dataset, load_preset, source_signature, validate_window)
@@ -40,15 +41,26 @@ def prepared_dataset(signature, score):
     return load_dataset(score)
 
 
+RESEARCH_PRESETS = {e.name: e for e in conservative_suite() if e.name.startswith('UCITS')}
+
+
 def apply_preset():
-    filename = {'Super Buffer': 'super-buffer.json', 'UCITS Conservative': 'ucit-conservative.json'}[st.session_state.preset]
-    score, config = load_preset(filename)
-    values = {'client': config.client_name, 'structure': 'Single ticker' if config.portfolio_size == 1 else 'Fund of funds',
+    if st.session_state.preset in RESEARCH_PRESETS:
+        experiment = RESEARCH_PRESETS[st.session_state.preset]
+        score, config = experiment.score, experiment.backtest
+    else:
+        filename = {'Super Buffer': 'super-buffer.json', 'UCITS Conservative': 'ucit-conservative.json'}[st.session_state.preset]
+        score, config = load_preset(filename)
+    values = {'client': st.session_state.preset if st.session_state.preset in RESEARCH_PRESETS else config.client_name, 'structure': 'Single ticker' if config.portfolio_size == 1 else 'Fund of funds',
               'fund_count': max(2, config.portfolio_size), 'cadence': config.review,
               'selection': config.selection, 'trigger_metric': 'ecr' if config.trigger == 'ecr' else config.buffer_metric,
               'ecr_threshold': config.threshold, 'component_threshold': config.metric_floor,
               'lag': config.execution_lag, 'cost': float(config.cost_bps), 'holding_days': config.min_holding_days,
-              'remaining_days': config.min_remaining_days, 'audit': config.candidate_audit}
+              'remaining_days': config.min_remaining_days, 'audit': config.candidate_audit,
+              'confirmations': config.confirmation_reviews, 'score_gap': float(config.min_selection_improvement),
+              'entry_margin': float(config.entry_metric_margin), 'cooldown': config.reentry_cooldown_days,
+              'replacement_limit': config.max_replacements_per_review, 'turnover_budget': float(config.max_turnover_per_review*100),
+              'use_bands': config.weight_band is not None, 'band_pp': float((config.weight_band if config.weight_band is not None else .05)*100)}
     values.update({'score_'+k: float(v) for k,v in asdict(score).items()})
     st.session_state.update(values)
 
@@ -56,6 +68,11 @@ def apply_preset():
 if 'preset' not in st.session_state:
     st.session_state.preset = 'Super Buffer'
     apply_preset()
+
+# Preserve neutral defaults when an already-open app reloads this version.
+for key, value in {'confirmations': 1, 'score_gap': 0., 'entry_margin': 0., 'cooldown': 0,
+                   'replacement_limit': 0, 'turnover_budget': 100., 'use_bands': False, 'band_pp': 5.}.items():
+    st.session_state.setdefault(key, value)
 
 st.markdown('<div class="eyebrow">ECR / RESEARCH WORKSPACE</div>', unsafe_allow_html=True)
 head, badge = st.columns([5, 1])
@@ -73,7 +90,8 @@ view = st.segmented_control('Workspace', ['Configure', 'Results'], key='view', l
 # Preserve configuration widget values when navigating to the results page.
 CONFIG_KEYS = ['preset', 'client', 'structure', 'fund_count', 'cadence', 'selection', 'trigger_metric',
                'ecr_threshold', 'component_threshold', 'lag', 'cost', 'holding_days', 'remaining_days',
-               'audit', 'start', 'end', 'cohorts'] + ['score_'+k for k in asdict(ScoreConfig())]
+               'audit', 'start', 'end', 'cohorts', 'confirmations', 'score_gap', 'entry_margin', 'cooldown',
+               'replacement_limit', 'turnover_budget', 'use_bands', 'band_pp'] + ['score_'+k for k in asdict(ScoreConfig())]
 for key in CONFIG_KEYS:
     if key in st.session_state:
         st.session_state[key] = st.session_state[key]
@@ -100,6 +118,7 @@ if view == 'Results':
         col.metric(title, value)
     st.caption(f"{row['Start']:%d %b %Y} – {row['End']:%d %b %Y} · {saved['cost_bps']:g} bps per replacement · "
                f"{'Next-close execution' if saved['execution_lag'] else 'Theoretical same-close execution'}")
+    st.caption(f"One-way turnover: {row['One-way Turnover']:.2f}× · Weight resets: {int(row.get('Weight Rebalances', 0))}. Detailed trades and any execution-budget deferrals are included in Excel.")
     if row['Missing Benchmark Sessions']:
         st.info(f"{int(row['Missing Benchmark Sessions'])} benchmark sessions are missing inside this window. Charts preserve those gaps; endpoint returns remain available.")
     chart_tab, holdings_tab, decisions_tab = st.tabs(['Performance & triggers', 'Holdings', 'Review log'])
@@ -117,6 +136,10 @@ if view == 'Results':
             st.info('No scheduled review occurred in this window.')
         else:
             st.dataframe(decisions.loc[decisions.Cohort == cohort], hide_index=True, width='stretch')
+    if 'trades' in result:
+        with st.expander('Executed trades & weight reviews'):
+            st.dataframe(result['trades'], hide_index=True, width='stretch')
+            st.dataframe(result['weight_reviews'], hide_index=True, width='stretch')
     with st.expander('All launch cohorts · performance summary'):
         st.dataframe(result['summary'], hide_index=True, width='stretch')
     st.subheader('Take the results with you')
@@ -133,7 +156,7 @@ if view == 'Results':
 st.caption('Follow the numbered cards. All key choices stay visible as you build your strategy.')
 preset_col, name_col = st.columns([1, 2])
 with preset_col:
-    st.selectbox('Start from a client preset', ['Super Buffer', 'UCITS Conservative'], key='preset', on_change=apply_preset)
+    st.selectbox('Start from a client preset', ['Super Buffer', 'UCITS Conservative', *RESEARCH_PRESETS], key='preset', on_change=apply_preset)
 with name_col:
     st.text_input('Run name', key='client', max_chars=100)
 
@@ -204,6 +227,27 @@ with main:
         remaining = b.number_input('Minimum outcome days remaining', min_value=0, max_value=366, step=1, key='remaining_days')
         audit = st.checkbox('Include full candidate rankings in Excel', key='audit')
         st.caption('Costs apply once to replaced capital. Initial entry is uncharged. The universe is the 12 F-series funds in the repository.')
+    with st.expander('Turnover & weight controls', expanded=False):
+        st.caption('Optional controls slow replacements. Defaults preserve the original strategy. Budgets and confirmation can delay exits from deteriorating holdings.')
+        a, b = st.columns(2)
+        confirmations = a.number_input('Consecutive breached reviews', min_value=1, max_value=12, step=1, key='confirmations',
+                                        help='At monthly cadence, 2 requires breaches on two consecutive monthly reviews. Recovery resets the count.')
+        score_gap = b.number_input('Minimum selection-score improvement', min_value=0., step=.05, key='score_gap',
+                                   help='Require the replacement to improve on the held score by this many points. Measured in the chosen selection metric.')
+        entry_margin = a.number_input('Replacement entry margin', min_value=0., max_value=1., step=.05, key='entry_margin', disabled=metric=='ecr',
+                                       help='For component triggers only: floor 0.80 plus margin 0.10 requires a replacement component score of at least 0.90. Zero disables this filter.')
+        cooldown = b.number_input('Repurchase cooldown (sessions)', min_value=0, max_value=2520, step=1, key='cooldown')
+        replacement_limit = a.number_input('Maximum replacements per review', min_value=0, max_value=12, step=1, key='replacement_limit',
+                                           help='Zero means unlimited. Process the worst triggered metric first.')
+        budget = b.number_input('Turnover budget per review (%)', min_value=.1, max_value=100., step=5., key='turnover_budget',
+                                 help='One-way turnover: replaced capital / portfolio capital; weight resets add half the absolute weight change. Applies at execution too.')
+        use_bands = st.checkbox('Reset equal weights only outside a drift band', key='use_bands', disabled=n==1)
+        band = st.number_input('Weight band around 1/N (percentage points)', min_value=0., max_value=100., step=1., key='band_pp', disabled=n==1 or not use_bands)
+        if n>1 and use_bands:
+            st.caption(f'Target {1/n:.1%}; review band {max(0,1/n-band/100):.1%}–{min(1,1/n+band/100):.1%}. A breach requests a full equal-weight reset at the configured execution time, subject to remaining turnover budget.')
+        st.caption('Minimum holding sessions are set under Execution & eligibility. Replacement controls do not suppress the separate weight-band policy. A band is a review trigger, not a continuously enforced weight cap.')
+        if budget/100 < 1/n:
+            st.warning('This budget is below an initially equal-sized holding. Whole-holding replacements can be deferred until their weight fits the budget.')
     with st.expander('ECR formula parameters', expanded=False):
         st.caption('The presets use the workbook multiplicative formula. Changing these values creates a custom experiment; it can change the score scale.')
         st.code('(w_DBB × DBB + w_Reset × Reset) × max(0, Buffer)^γB × max(0, Cap)^γC + bonus × Period', language=None)
@@ -229,7 +273,11 @@ try:
                             threshold=threshold if metric == 'ecr' else 1.5,
                             metric_floor=threshold if metric != 'ecr' else .8, comparator='<',
                             execution_lag=lag, cost_bps=cost, min_holding_days=hold, min_remaining_days=remaining,
-                            candidate_audit=audit, start_date=start.isoformat(), end_date=end.isoformat(), cohorts=tuple(cohorts))
+                            candidate_audit=audit, start_date=start.isoformat(), end_date=end.isoformat(), cohorts=tuple(cohorts),
+                            confirmation_reviews=confirmations, min_selection_improvement=score_gap,
+                            entry_metric_margin=entry_margin if metric != 'ecr' else 0., reentry_cooldown_days=cooldown,
+                            max_replacements_per_review=replacement_limit, max_turnover_per_review=budget/100,
+                            weight_band=band/100 if n>1 and use_bands else None)
     validate_window(default_data, config)
 except ValueError as exc:
     error = str(exc)
@@ -241,6 +289,8 @@ with summary, st.container(border=True):
                          ('Review', CADENCES[cadence]), ('Selection', SELECTIONS[selection]),
                          ('Trigger', f'{METRICS[metric]} < {threshold:g}'),
                          ('Execution', 'Next trading close' if lag else 'Same close · theoretical'),
+                         ('Turnover budget', f'{budget:g}% per review'),
+                         ('Weight policy', f'1/N ± {band:g}pp' if n>1 and use_bands else 'Allow weights to drift'),
                          ('Launch tests', ', '.join(cohorts) or 'Choose a launch month')]:
         st.markdown(f'<div class="summary-item"><span>{escape(label)}</span><strong>{escape(value)}</strong></div>', unsafe_allow_html=True)
     st.write('')

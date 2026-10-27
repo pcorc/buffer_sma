@@ -13,6 +13,9 @@ def export_results(result, output, manifest, excel=True, plots=True):
              'decisions': 'Review Decisions', 'candidates': 'Candidate Audit'}
     if 'holdings' in result:
         names['holdings'] = 'Portfolio Holdings'
+    for key, sheet in [('trades', 'Executed Trades'), ('weight_reviews', 'Weight Reviews')]:
+        if key in result:
+            names[key] = sheet
     for key in names:
         if len(result[key].columns):
             result[key].to_csv(output / f'{key}.csv', index=False)

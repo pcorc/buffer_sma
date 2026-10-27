@@ -8,14 +8,18 @@ import pandas as pd
 
 from backtesting.engine import DIAGNOSTIC_MAP, _start_index, trigger_signals
 from backtesting.schedule import review_dates
+from config.settings import replacement_controls_enabled
+from core.turnover import controlled_plan, weight_band_breached
 from core.selection import rank_candidates, replacement_plan, selection_panel
 
 
 def simulate_portfolio(data, config):
     n = config.portfolio_size
+    controlled = replacement_controls_enabled(config)
     parameters = {'model': 'ecr-ar-v1', 'score': asdict(data.score_config),
                   'backtest': asdict(config), 'data_id': data.data_id,
-                  'portfolio_policy': 'equal-initial-sleeves; replace-breached-only; weights-drift'}
+                  'portfolio_policy': ('equal-initial-sleeves; replace-breached-only; ' +
+                                       ('review-date-weight-bands' if config.weight_band is not None else 'weights-drift'))}
     strategy_id = hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()[:16]
     end = pd.Timestamp(config.end_date) if config.end_date else data.dates[-1]
     if pd.Timestamp(config.start_date) > end:
@@ -26,19 +30,24 @@ def simulate_portfolio(data, config):
                    & (data.days >= config.min_remaining_days))
     metric = {'buffer_integrity': data.buffers, 'dbb': data.dbb, 'cap_integrity': data.caps}[config.buffer_metric]
     diagnostics, decisions, candidates, daily, holdings, summaries = [], [], [], [], [], []
+    trades, weight_reviews = [], []
 
     for cohort in config.cohorts:
         start = _start_index(data, cohort, config)
         if start >= stop:
             raise ValueError(f'No observations in requested period for {cohort}')
-        signal_i = start - config.execution_lag
+        signal_i = start - config.execution_lag if config.initial_selection == 'highest_score' else start
         if signal_i < 0:
             raise ValueError('No prior session for initial selection signal')
         ranked = rank_candidates(ranking[signal_i], eligibility[signal_i], data.tickers)
         if len(ranked) < n:
             raise ValueError(f'{cohort}: requested {n} funds, only {len(ranked)} eligible on {data.dates[signal_i].date()}')
         held = np.array(ranked[:n], dtype=int)
+        if n == 1 and config.initial_selection == 'cohort':
+            held[0] = data.tickers.index('F' + cohort)
         initial = held.copy()
+        if n == 1:
+            initial[0] = data.tickers.index('F' + cohort)
         reviews = review_dates(data.dates, data.cycles, start, stop, config.review)
         bench = data.benchmarks[start:stop]
         if not np.isfinite(bench[[0, -1]]).all() or (bench <= 0).any():
@@ -56,6 +65,9 @@ def simulate_portfolio(data, config):
         cumulative_cost = 0.
         cumulative_turnover = 0.
         pending = None
+        confirmation = np.zeros(n, dtype=int)
+        last_exit = np.full(len(data.tickers), -100000, dtype=int)
+        weight_rebalances = 0
         cohort_daily = []
 
         def snapshot(i, slot, fund, signal_index, event_type, outgoing=None):
@@ -78,27 +90,64 @@ def simulate_portfolio(data, config):
                           'Capital Before Cost': capital[slot]})
             diagnostics.append(event)
 
-        def execute(plan, signal_index, i):
-            nonlocal switches, cumulative_cost, cumulative_turnover
-            changes = {slot: new for slot, new in plan.items() if new != held[slot]}
-            next_held = held.copy()
-            for slot, new in changes.items():
+        def execute(plan, signal_index, i, rebalance_weights=False):
+            nonlocal switches, cumulative_cost, cumulative_turnover, weight_rebalances
+            total_before = float(capital.sum())
+            spent = 0.0
+            for slot, new in plan.items():
+                old = held[slot]
+                if new == old:
+                    continue
+                fraction = capital[slot] / total_before
+                # Next-close prices can change sleeve weights; recheck the actual budget.
+                if spent + fraction > config.max_turnover_per_review + 1e-12:
+                    trades.append({'Cohort': cohort.title(), 'Date': data.dates[i],
+                                   'Signal Date': data.dates[signal_index], 'Position': slot+1,
+                                   'Type': 'replacement', 'Action': 'deferred_execution_budget',
+                                   'From Fund': data.tickers[old], 'Fund': data.tickers[new],
+                                   'One-way Turnover': 0., 'Cost NAV Units': 0.})
+                    continue
                 if not np.isfinite(data.nav[i, new]) or data.nav[i, new] <= 0:
                     raise ValueError('Missing execution NAV for pending selection')
-                next_held[slot] = new
-            if len(set(next_held)) != n:
-                raise ValueError('Replacement plan would duplicate holdings')
-            total_before = capital.sum()
-            for slot, new in changes.items():
-                snapshot(i, slot, new, signal_index, 'switch', data.tickers[held[slot]])
-                cumulative_turnover += capital[slot] / total_before
+                if new in held:
+                    raise ValueError('Replacement plan would duplicate holdings')
+                snapshot(i, slot, new, signal_index, 'switch', data.tickers[old])
                 cost = capital[slot] * config.cost_bps / 10000
+                trades.append({'Cohort': cohort.title(), 'Date': data.dates[i],
+                               'Signal Date': data.dates[signal_index], 'Position': slot+1,
+                               'Type': 'replacement', 'Action': 'executed',
+                               'From Fund': data.tickers[old], 'Fund': data.tickers[new],
+                               'One-way Turnover': fraction, 'Cost NAV Units': cost})
+                spent += fraction
+                cumulative_turnover += fraction
                 capital[slot] -= cost
                 cumulative_cost += cost
                 held[slot] = new
+                last_exit[old] = i
                 last_trade[slot] = i
+                confirmation[slot] = 0
                 entry_metric[slot] = metric[i, new]
                 switches += 1
+            if rebalance_weights:
+                # Band breach is decided at signal time; the next-close target is equal weights.
+                gross = float(capital.sum())
+                turnover_nav = float(np.abs(capital - gross/n).sum() / 2)
+                fraction = turnover_nav / total_before
+                action = 'deferred_execution_budget'
+                cost = 0.
+                if spent + fraction <= config.max_turnover_per_review + 1e-12:
+                    action = 'executed' if turnover_nav > 1e-12 else 'no_change'
+                    cost = turnover_nav * config.cost_bps / 10000
+                    capital[:] = (gross - cost) / n
+                    cumulative_cost += cost
+                    cumulative_turnover += fraction
+                    weight_rebalances += int(action == 'executed')
+                trades.append({'Cohort': cohort.title(), 'Date': data.dates[i],
+                               'Signal Date': data.dates[signal_index], 'Type': 'weight_rebalance',
+                               'Action': action, 'One-way Turnover': fraction if action == 'executed' else 0.,
+                               'Cost NAV Units': cost})
+            if len(set(held)) != n:
+                raise ValueError('Replacement plan would duplicate holdings')
 
         for slot, fund in enumerate(held):
             snapshot(start, slot, fund, signal_i, 'initial')
@@ -110,15 +159,36 @@ def simulate_portfolio(data, config):
             if i > start:
                 capital *= data.nav[i, held] / data.nav[i-1, held]
             if pending is not None:
-                plan, signal_index = pending
-                execute(plan, signal_index, i)
+                plan, signal_index, rebalance_weights = pending
+                execute(plan, signal_index, i, rebalance_weights)
                 pending = None
             if i > start and date in reviews:
                 signals = [trigger_signals(data.scores[i, j], metric[i, j], entry_metric[slot], config)
                            for slot, j in enumerate(held)]
+                confirmation[:] = [confirmation[slot]+1 if sig[0] else 0 for slot,sig in enumerate(signals)]
                 triggered = [slot for slot, sig in enumerate(signals)
-                             if sig[0] and i-last_trade[slot] >= config.min_holding_days]
-                plan = replacement_plan(held, triggered, ranking[i], eligibility[i], data.tickers)
+                             if sig[0] and i-last_trade[slot] >= config.min_holding_days
+                             and confirmation[slot] >= config.confirmation_reviews]
+                reasons = {slot: ('not_triggered' if not sig[0] else
+                                  'minimum_hold' if i-last_trade[slot] < config.min_holding_days else
+                                  'awaiting_confirmation' if confirmation[slot] < config.confirmation_reviews else
+                                  'no_better_candidate') for slot,sig in enumerate(signals)}
+                if controlled:
+                    plan, control_reasons = controlled_plan(held, triggered, ranking[i], eligibility[i],
+                                                           data.tickers, data.scores[i] if config.trigger == 'ecr' else metric[i], capital/capital.sum(),
+                                                           last_exit, i, config)
+                    reasons.update(control_reasons)
+                else:
+                    plan = replacement_plan(held, triggered, ranking[i], eligibility[i], data.tickers)
+                    reasons.update({slot: 'replacement_allowed' if new != held[slot] else 'no_better_candidate'
+                                    for slot,new in plan.items()})
+                rebalance_weights = weight_band_breached(capital, config.weight_band)
+                if config.weight_band is not None:
+                    weight_reviews.append({'Cohort': cohort.title(), 'Date': date,
+                                           'Max Weight Deviation': float(np.abs(capital/capital.sum()-1/n).max()),
+                                           'Weight Band': config.weight_band, 'Breached': rebalance_weights,
+                                           'Action': ('unexecuted_end' if config.execution_lag and i+1 >= stop else
+                                                      'scheduled' if config.execution_lag else 'execution_check') if rebalance_weights else 'within_band'})
                 review_id = f'{strategy_id}/{cohort}/review/{date.date()}'
                 for slot, fund in enumerate(held):
                     new = plan.get(slot, fund)
@@ -131,7 +201,9 @@ def simulate_portfolio(data, config):
                                       'Cohort': cohort.title(), 'Date': date, 'Held Fund': data.tickers[fund],
                                       'Held Score': data.scores[i, fund], 'Best Fund': data.tickers[new],
                                       'Best Score': ranking[i, new], 'Selection': config.selection, 'Holding Days': i-last_trade[slot],
-                                      'Triggered': slot in triggered, 'Action': action, 'Trigger': config.trigger,
+                                      'Triggered': slot in triggered, 'Raw Trigger': signals[slot][0],
+                                      'Confirmation Reviews': int(confirmation[slot]), 'Control Reason': reasons[slot],
+                                      'Action': action, 'Trigger': config.trigger,
                                       'ECR Signal': ecr_signal, 'Buffer Signal': buffer_signal,
                                       'Buffer Metric': config.buffer_metric, 'Held Buffer Score': metric[i, fund],
                                       'Entry Buffer Score': entry_metric[slot], 'Buffer Deterioration': decline,
@@ -147,13 +219,15 @@ def simulate_portfolio(data, config):
                                            'Cohort': cohort.title(), 'Date': date, 'Fund': ticker,
                                            'ECR': data.scores[i,j], 'Selection': config.selection, 'Selection Score': ranking[i,j], 'Eligible': bool(eligibility[i,j]),
                                            'Rank': ranks.get(j), 'Retained Position': j in retained,
-                                           'Selected': j in plan.values(), 'Available for Replacement': j not in retained,
+                                           'Selected': j in plan.values(), 'Available for Replacement': j not in (set(held) if controlled else retained),
+                                           'Passes Entry Margin': not config.entry_metric_margin or metric[i,j] >= config.metric_floor+config.entry_metric_margin,
+                                           'Outside Cooldown': i-last_exit[j] >= config.reentry_cooldown_days,
                                            'Current Holding': j in held})
                 if config.execution_lag:
-                    if i+1 < stop and any(new != held[slot] for slot,new in plan.items()):
-                        pending = (plan, i)
+                    if i+1 < stop and (rebalance_weights or any(new != held[slot] for slot,new in plan.items())):
+                        pending = (plan, i, rebalance_weights)
                 else:
-                    execute(plan, i, i)
+                    execute(plan, i, i, rebalance_weights)
             total = float(capital.sum())
             weights = capital / total
             record = {'Strategy ID': strategy_id, 'Cohort': cohort.title(), 'Date': date,
@@ -188,6 +262,7 @@ def simulate_portfolio(data, config):
                           'Max Drawdown': (curve['Strategy NAV']/curve['Strategy NAV'].cummax()-1).min(),
                           'Switches': switches, 'Switches per Year': switches*365/elapsed if elapsed else np.nan,
                           'One-way Turnover': cumulative_turnover, 'Trading Cost NAV Units': cumulative_cost,
+                          'Weight Rebalances': weight_rebalances,
                           'Missing Benchmark Sessions': benchmark_gaps,
                           'SPY Total Return': curve['SPY NAV'].iloc[-1]/100-1,
                           'BUFR Total Return': curve['BUFR NAV'].iloc[-1]/100-1,
@@ -201,4 +276,5 @@ def simulate_portfolio(data, config):
     return {'parameters': parameters, 'strategy_id': strategy_id, 'summary': pd.DataFrame(summaries),
             'daily': pd.DataFrame(daily), 'holdings': pd.DataFrame(holdings),
             'diagnostics': pd.DataFrame(diagnostics), 'decisions': pd.DataFrame(decisions),
-            'candidates': candidate_frame}
+            'candidates': candidate_frame, 'trades': pd.DataFrame(trades),
+            'weight_reviews': pd.DataFrame(weight_reviews)}

@@ -80,6 +80,8 @@ def comparison_table(results):
                      'Mean Downside Deviation': s['Annualized Downside Deviation'].mean(),
                      'Mean Sortino': s.Sortino.mean(),
                      'Mean One-way Turnover': s['One-way Turnover'].mean(),
+                     'Mean Annualized Turnover': (s['One-way Turnover'] * 365 / (s.End-s.Start).dt.days.replace(0, float('nan'))).mean(),
+                     'Mean Weight Rebalances': s['Weight Rebalances'].mean() if 'Weight Rebalances' in s else 0.,
                      'Worst Drawdown': s['Max Drawdown'].min(), 'Mean Switches': s.Switches.mean(),
                      'Mean Switches per Year': s['Switches per Year'].mean(),
                      'Simulation Seconds': result['timings']['simulate_seconds'],

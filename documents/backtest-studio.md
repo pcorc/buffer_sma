@@ -99,3 +99,14 @@ selection changes for single and multi-fund runs, independent trigger thresholds
 calendar coverage, application preset changes/navigation, invalid configuration,
 and ZIP/Excel contents. Install `requirements-app.txt` to include the application
 and export tests; core tests remain usable with `requirements.txt` alone.
+
+## Conservative experiments
+
+The preset dropdown also includes 34 named UCITS research variants. The
+**Turnover & weight controls** section adds confirmation, minimum score gain,
+replacement entry margin, ticker cooldown, replacement/turnover limits and
+optional equal-weight drift bands. These controls are saved in the same
+replayable JSON. [The conservative research guide](conservative-research.md)
+defines every rule and shows how to run all comparisons. The original client
+presets still have these controls off. Weight-only events are exported separately
+from fund replacement diagnostics.

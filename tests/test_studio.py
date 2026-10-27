@@ -154,3 +154,28 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(app.selectbox(key='trigger_metric').value,'ecr')
         self.assertEqual(app.selectbox(key='ecr_threshold').value,1.5)
         self.assertEqual(app.session_state['result']['parameters']['backtest']['portfolio_size'],3)
+
+    def test_conservative_preset_and_weight_controls_export(self):
+        from streamlit.testing.v1 import AppTest
+        app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'),default_timeout=60).run()
+        app.selectbox(key='preset').select('UCITS / N=3 / Buffer 80% + combined controls').run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.number_input(key='confirmations').value,2)
+        self.assertAlmostEqual(app.number_input(key='score_gap').value,.1)
+        self.assertAlmostEqual(app.number_input(key='turnover_budget').value,40.)
+        self.assertTrue(app.checkbox(key='use_bands').value)
+        app.number_input(key='band_pp').set_value(1.).run()
+        app.button[0].click().run(timeout=120)
+        self.assertFalse(app.exception)
+        saved=app.session_state['result']['parameters']['backtest']
+        self.assertEqual(saved['weight_band'],.01)
+        self.assertEqual(saved['entry_metric_margin'],.05)
+        self.assertEqual(saved['confirmation_reviews'],2)
+        book=pd.ExcelFile(BytesIO(app.session_state['downloads']['excel']))
+        self.assertIn('Executed Trades',book.sheet_names)
+        self.assertIn('Weight Reviews',book.sheet_names)
+        app.segmented_control(key='view').set_value('Configure').run()
+        app.selectbox(key='preset').select('Super Buffer').run()
+        self.assertFalse(app.checkbox(key='use_bands').value)
+        self.assertEqual(app.number_input(key='confirmations').value,1)
+        self.assertEqual(app.number_input(key='turnover_budget').value,100.)
