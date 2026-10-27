@@ -8,6 +8,7 @@ import pandas as pd
 
 from config.settings import BacktestConfig, MONTHS, ScoreConfig
 from core.scoring import score_funds
+from core.selection import rank_candidates
 
 DIAGNOSTIC_MAP = {
     'Ref Asset Return': 'reference_asset_return',
@@ -101,6 +102,9 @@ def _start_index(data, cohort, config):
 
 
 def simulate(data: PreparedData, config=BacktestConfig()):
+    if config.portfolio_size > 1:
+        from backtesting.portfolio import simulate_portfolio
+        return simulate_portfolio(data, config)
     model_name = 'ecr-ar-v1'
     parameters = {'model': model_name, 'score': asdict(data.score_config),
                   'backtest': asdict(config), 'data_id': data.data_id}
@@ -134,7 +138,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
             available = np.flatnonzero(eligibility[initial_signal])
             if not len(available):
                 raise ValueError('No eligible initial candidates')
-            held = int(available[np.argmax(data.scores[initial_signal, available])])
+            held = int(rank_candidates(data.scores[initial_signal], eligibility[initial_signal], data.tickers)[0])
         if config.review == 'monthly':
             expected = pd.period_range(data.dates[start], data.dates[stop - 1], freq='M')
             if not set(expected).issubset(set(data.cycles.to_period('M'))):
@@ -153,6 +157,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
         if not np.isfinite(data.scores[start, held]) or data.days[start, held] < config.min_remaining_days:
             raise ValueError(f'Invalid initial score for {initial_fund}')
         nav, last_trade, switches, event_number = 100.0, start, 0, 0
+        trading_cost = 0.0
         entry_buffer = buffer_panel[start, held]
         pending = None
         cohort_daily = []
@@ -193,6 +198,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                 snapshot(i, new, signal_i, 'switch', data.tickers[held], signal_score)
                 held, last_trade, switches = new, i, switches + 1
                 entry_buffer = buffer_panel[i, held]
+                trading_cost += nav * config.cost_bps / 10000
                 nav *= 1 - config.cost_bps / 10000
                 pending = None
             if i > start and (config.review == 'daily' or date in reviews):
@@ -205,10 +211,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                 available = np.flatnonzero(eligible)
                 if not len(available):
                     raise ValueError(f'No eligible funds on {date.date()}')
-                best = int(available[np.argmax(data.scores[i, available])])
-                # Exact ties favor the current holding, then alphabetical ticker order.
-                if eligible[held] and held_score == data.scores[i, best]:
-                    best = held
+                best = int(rank_candidates(data.scores[i], eligible, data.tickers, [held])[0])
                 action = 'hold'
                 if fired:
                     action = 'no_switch' if best == held else 'switch'
@@ -221,6 +224,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                                 action = 'unexecuted_end'
                         else:
                             snapshot(i, best, i, 'switch', data.tickers[held], data.scores[i, best])
+                            trading_cost += nav * config.cost_bps / 10000
                             nav *= 1 - config.cost_bps / 10000
                             switches += 1
                 review_id = f'{strategy_id}/{cohort}/review/{date.date()}'
@@ -264,13 +268,18 @@ def simulate(data: PreparedData, config=BacktestConfig()):
         elapsed = (data.dates[stop - 1] - data.dates[start]).days
         annual = (nav / 100)**(365 / elapsed) - 1 if elapsed else np.nan
         volatility = returns.std() * np.sqrt(252)
+        downside = np.sqrt(np.mean(np.minimum(returns, 0)**2)) * np.sqrt(252)
         sharpe = returns.mean() / returns.std() * np.sqrt(252) if returns.std() > 0 else np.nan
         summaries.append({'Strategy ID': strategy_id, 'Cohort': cohort.title(),
                           'Start': data.dates[start], 'End': data.dates[stop - 1], 'Observations': len(curve),
                           'Total Return': total, 'Annualized Return': annual,
                           'Annualized Volatility': volatility, 'Sharpe': sharpe,
+                          'Annualized Downside Deviation': downside,
+                          'Sortino': returns.mean() * 252 / downside if downside > 0 else np.nan,
+                          'Client': config.client_name, 'Portfolio Size': config.portfolio_size,
                           'Max Drawdown': (curve['Strategy NAV'] / curve['Strategy NAV'].cummax() - 1).min(),
                           'Switches': switches, 'Switches per Year': switches * 365 / elapsed if elapsed else np.nan,
+                          'One-way Turnover': float(switches), 'Trading Cost NAV Units': trading_cost,
                           'Missing Benchmark Sessions': benchmark_gaps,
                           'SPY Total Return': curve['SPY NAV'].iloc[-1] / 100 - 1,
                           'BUFR Total Return': curve['BUFR NAV'].iloc[-1] / 100 - 1,
@@ -282,7 +291,13 @@ def simulate(data: PreparedData, config=BacktestConfig()):
         columns = ['Date', 'Fund', *[c for c in DIAGNOSTIC_MAP if c != 'ECR']]
         candidate_frame = candidate_frame.merge(raw[columns], on=['Date', 'Fund'], how='left',
                                                 validate='many_to_one')
+    daily_frame = pd.DataFrame(daily)
+    holdings = daily_frame[['Strategy ID', 'Cohort', 'Date', 'Fund at Close', 'Strategy NAV',
+                            'Held ECR Score', 'Held Buffer Score', 'Entry Buffer Score']].rename(
+        columns={'Fund at Close': 'Fund', 'Strategy NAV': 'Capital'})
+    holdings['Position'] = 1
+    holdings['Weight'] = 1.0
     return {'parameters': parameters, 'strategy_id': strategy_id,
-            'summary': pd.DataFrame(summaries), 'daily': pd.DataFrame(daily),
+            'summary': pd.DataFrame(summaries), 'daily': daily_frame, 'holdings': holdings,
             'diagnostics': pd.DataFrame(diagnostics), 'decisions': pd.DataFrame(decisions),
             'candidates': candidate_frame}

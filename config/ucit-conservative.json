@@ -9,6 +9,9 @@
     "execution_lag": 1,
     "cost_bps": 5,
     "buffer_metric": "buffer_integrity",
-    "metric_floor": 0.8
+    "metric_floor": 0.8,
+    "client_name": "UCITS Conservative",
+    "portfolio_size": 3,
+    "selection": "highest_ecr"
   }
 }

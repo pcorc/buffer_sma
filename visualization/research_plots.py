@@ -12,7 +12,7 @@ def dashboard(result, cohort='Jan'):
                         subplot_titles=('NAV and executed switches', 'Drawdown', 'Held buffer score versus entry anchor'))
     for column in ['Strategy NAV', 'SPY NAV', 'BUFR NAV', 'Hold NAV']:
         fig.add_trace(go.Scatter(x=daily.Date, y=daily[column], name=column), row=1, col=1)
-    marked = events.merge(daily[['Date', 'Strategy NAV']], on='Date', validate='one_to_one')
+    marked = events.merge(daily[['Date', 'Strategy NAV']], on='Date', validate='many_to_one')
     fig.add_trace(go.Scatter(x=marked.Date, y=marked['Strategy NAV'], mode='markers',
                             marker=dict(symbol='diamond', size=9), text=marked.Fund,
                             name='Entry / switch', hovertemplate='%{x}<br>%{text}<extra></extra>'), row=1, col=1)
@@ -22,10 +22,34 @@ def dashboard(result, cohort='Jan'):
     config = result['parameters']['backtest']
     floor = (daily['Entry Buffer Score'] * 0 + config['metric_floor'] if config['trigger'] == 'metric_floor'
              else daily['Entry Buffer Score'] * (1-drop))
-    for name, values in [(config['buffer_metric'], daily['Held Buffer Score']), ('Trigger floor', floor)]:
-        fig.add_trace(go.Scatter(x=daily.Date, y=values, name=name), row=3, col=1)
-    fig.update_layout(height=900, title=f'ECR — {cohort}', hovermode='x unified')
+    if config['portfolio_size'] > 1:
+        positions = result['holdings'].query('Cohort == @cohort')
+        for slot, frame in positions.groupby('Position'):
+            fig.add_trace(go.Scatter(x=frame.Date, y=frame['Held Buffer Score'],
+                                    text=frame.Fund, name=f'Position {slot} / {config["buffer_metric"]}',
+                                    hovertemplate='%{x}<br>%{text}: %{y:.3f}<extra></extra>'), row=3, col=1)
+            if config['trigger'] != 'metric_floor':
+                fig.add_trace(go.Scatter(x=frame.Date, y=frame['Entry Buffer Score']*(1-drop),
+                                        name=f'Position {slot} entry-relative floor', line=dict(dash='dot')), row=3, col=1)
+        if config['trigger'] == 'metric_floor':
+            fig.add_trace(go.Scatter(x=daily.Date, y=floor, name='Buffer integrity floor', line=dict(dash='dot')), row=3, col=1)
+    else:
+        for name, values in [(config['buffer_metric'], daily['Held Buffer Score']), ('Trigger floor', floor)]:
+            fig.add_trace(go.Scatter(x=daily.Date, y=values, name=name), row=3, col=1)
+    fig.update_layout(height=900, title=f'{config["client_name"]} — {cohort} — N={config["portfolio_size"]}', hovermode='x unified')
     fig.update_yaxes(tickformat='.0%', row=2, col=1)
+    return fig
+
+
+def holdings_figure(result, cohort='Jan'):
+    positions = result['holdings'].query('Cohort == @cohort')
+    weights = positions.pivot(index='Date', columns='Fund', values='Weight').fillna(0)
+    fig = go.Figure()
+    for fund in weights:
+        fig.add_trace(go.Scatter(x=weights.index, y=weights[fund], name=fund, stackgroup='weights',
+                                hovertemplate='%{x}<br>%{y:.1%}<extra>%{fullData.name}</extra>'))
+    fig.update_layout(title=f'Actual portfolio weights — {cohort}', yaxis_tickformat='.0%',
+                      yaxis_range=[0, 1], height=450, hovermode='x unified')
     return fig
 
 

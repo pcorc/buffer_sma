@@ -11,6 +11,8 @@ def export_results(result, output, manifest, excel=True, plots=True):
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2, default=str) + '\n')
     names = {'summary': 'Summary', 'daily': 'Daily NAV', 'diagnostics': 'ECR Diagnostics',
              'decisions': 'Review Decisions', 'candidates': 'Candidate Audit'}
+    if 'holdings' in result:
+        names['holdings'] = 'Portfolio Holdings'
     for key in names:
         if len(result[key].columns):
             result[key].to_csv(output / f'{key}.csv', index=False)

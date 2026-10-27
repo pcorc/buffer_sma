@@ -198,3 +198,22 @@ The preset `config/ucit-conservative.json` uses this trigger. The notebook compa
 70%, 80% and 90% floors against the regular ECR-threshold baseline with identical
 selection scoring and other assumptions. Three-component allocation controls
 have been removed; this is not a weight-sweep experiment.
+
+## Saved client presets and portfolio size
+
+- **Super Buffer:** `python main.py --config config/super-buffer.json` — one fund,
+  strict ECR < 1.5 trigger, highest-ECR selection.
+- **UCITS Conservative:** `python main.py --config config/ucit-conservative.json
+  --portfolio-size 3 --metric-floor 0.8` — N distinct funds, per-position buffer
+  integrity trigger, highest-ECR replacement selection.
+
+N is configurable per run/client, not a time-varying allocation rule. UCITS starts
+with equal-weight top-N ECR holdings, replaces only breached positions, lets other
+weights drift, and charges costs only on the positions traded. The preset's N=3
+is an editable example. Daily position capital/weights are exported in a separate
+holdings table. See the conservative methods guide for simultaneous triggers,
+no-op selections, timing, insufficient-universe behavior and risk metrics.
+
+The notebook loads a named client preset and compares N/floor combinations.
+Running without `--config`, or using `config/ecr.json`, uses workbook-parity
+research defaults (including `<=`), rather than either named client preset.

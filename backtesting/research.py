@@ -76,6 +76,10 @@ def comparison_table(results):
                      'Worst Cohort vs BUFR': s['vs BUFR Cumulative Excess'].min(),
                      'Positive Cohorts': int((s['vs BUFR Cumulative Excess'] > 0).sum()),
                      'Cohorts': len(s), 'Mean Sharpe': s.Sharpe.mean(),
+                     'Portfolio Size': int(s['Portfolio Size'].iloc[0]),
+                     'Mean Downside Deviation': s['Annualized Downside Deviation'].mean(),
+                     'Mean Sortino': s.Sortino.mean(),
+                     'Mean One-way Turnover': s['One-way Turnover'].mean(),
                      'Worst Drawdown': s['Max Drawdown'].min(), 'Mean Switches': s.Switches.mean(),
                      'Mean Switches per Year': s['Switches per Year'].mean(),
                      'Simulation Seconds': result['timings']['simulate_seconds'],
@@ -110,3 +114,19 @@ def conservative_experiments(score=ScoreConfig(), backtest=BacktestConfig()):
 def initial_experiments(score=ScoreConfig(), backtest=BacktestConfig()):
     """The notebook's initial comparison uses the confirmed conservative experiment."""
     return conservative_experiments(score, backtest)
+
+
+def client_experiments(score=ScoreConfig(), backtest=BacktestConfig(), sizes=(1,3,5), floors=(.7,.8,.9)):
+    """Compare UCITS portfolio sizes/floors against a separately saved Super Buffer rule."""
+    from dataclasses import replace
+    common = replace(backtest, candidate_audit=False, initial_selection='highest_score',
+                     selection='highest_ecr', comparator='<')
+    tests = [Experiment('Super Buffer / ECR < 1.5 / N=1', score,
+                        replace(common, client_name='Super Buffer', portfolio_size=1,
+                                trigger='ecr', threshold=1.5))]
+    for n in sizes:
+        for floor in floors:
+            tests.append(Experiment(f'UCITS / N={n} / buffer < {floor:.0%}', score,
+                         replace(common, client_name='UCITS Conservative', portfolio_size=n,
+                                 trigger='metric_floor', buffer_metric='buffer_integrity', metric_floor=floor)))
+    return tests

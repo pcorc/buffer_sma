@@ -31,6 +31,9 @@ class ScoreConfig:
 
 @dataclass(frozen=True)
 class BacktestConfig:
+    client_name: str = 'Research'
+    portfolio_size: int = 1
+    selection: str = 'highest_ecr'
     threshold: float = 1.5
     comparator: str = '<='
     review: str = 'monthly'
@@ -49,6 +52,14 @@ class BacktestConfig:
     metric_floor: float = 0.80
 
     def __post_init__(self):
+        if not isinstance(self.client_name, str) or not self.client_name.strip():
+            raise ValueError('client_name must be a nonempty string')
+        if isinstance(self.portfolio_size, bool) or not isinstance(self.portfolio_size, int) or not 1 <= self.portfolio_size <= 12:
+            raise ValueError('portfolio_size must be an integer from 1 to 12')
+        if self.selection != 'highest_ecr':
+            raise ValueError('selection must be highest_ecr')
+        if self.portfolio_size > 1 and self.initial_selection != 'highest_score':
+            raise ValueError('Multi-fund portfolios require initial_selection=highest_score')
         if self.initial_selection not in ('cohort', 'highest_score'):
             raise ValueError('initial_selection must be cohort or highest_score')
         if self.trigger not in ('ecr', 'buffer_drop', 'ecr_or_buffer', 'ecr_and_buffer', 'metric_floor'):
