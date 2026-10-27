@@ -8,7 +8,8 @@ import pandas as pd
 
 from config.settings import BacktestConfig, MONTHS, ScoreConfig
 from core.scoring import score_funds
-from core.selection import rank_candidates
+from backtesting.schedule import review_dates
+from core.selection import rank_candidates, selection_panel
 
 DIAGNOSTIC_MAP = {
     'Ref Asset Return': 'reference_asset_return',
@@ -113,9 +114,9 @@ def simulate(data: PreparedData, config=BacktestConfig()):
     if pd.Timestamp(config.start_date) > end:
         raise ValueError('start_date is after end_date')
     stop = int(data.dates.searchsorted(end, side='right'))
-    reviews = set(data.cycles)
+    ranking = selection_panel(data, config.selection)
     # Shared across cohorts: eligibility and buffer metrics do not depend on holdings.
-    eligibility = (np.isfinite(data.scores) & np.isfinite(data.nav) & (data.nav > 0)
+    eligibility = (np.isfinite(data.scores) & np.isfinite(ranking) & np.isfinite(data.nav) & (data.nav > 0)
                    & (data.days >= config.min_remaining_days))
     buffer_panel = {'buffer_integrity': data.buffers, 'dbb': data.dbb,
                     'cap_integrity': data.caps}[config.buffer_metric]
@@ -138,14 +139,8 @@ def simulate(data: PreparedData, config=BacktestConfig()):
             available = np.flatnonzero(eligibility[initial_signal])
             if not len(available):
                 raise ValueError('No eligible initial candidates')
-            held = int(rank_candidates(data.scores[initial_signal], eligibility[initial_signal], data.tickers)[0])
-        if config.review == 'monthly':
-            expected = pd.period_range(data.dates[start], data.dates[stop - 1], freq='M')
-            if not set(expected).issubset(set(data.cycles.to_period('M'))):
-                raise ValueError('Monthly cycle calendar does not cover the requested period')
-            for cycle in data.cycles:
-                if data.dates[start] <= cycle <= data.dates[stop - 1] and cycle not in data.dates:
-                    raise ValueError(f'No observation on cycle date {cycle.date()}; check holiday calendar')
+            held = int(rank_candidates(ranking[initial_signal], eligibility[initial_signal], data.tickers)[0])
+        reviews = review_dates(data.dates, data.cycles, start, stop, config.review)
         bench = data.benchmarks[start:stop]
         if not np.isfinite(bench[[0, -1]]).all() or (bench <= 0).any():
             raise ValueError(f'Missing benchmark endpoint or invalid NAV for {cohort}')
@@ -174,7 +169,8 @@ def simulate(data: PreparedData, config=BacktestConfig()):
             event.update({'Strategy ID': strategy_id, 'Event ID': f'{strategy_id}/{cohort}/{event_number}',
                           'Event Type': event_type, 'Signal Date': data.dates[signal_i],
                           'Execution Date': date, 'From Fund': outgoing,
-                          'Selection Score at Signal': signal_score if signal_score is not None else row.ecr,
+                          'Selection Score at Signal': signal_score if signal_score is not None else ranking[i, fund],
+                          'Selection': config.selection,
                           'Threshold': config.threshold, 'Comparator': config.comparator,
                           'Review': config.review, 'Data ID': data.data_id,
                           'Model': model_name, 'Trigger': config.trigger,
@@ -182,7 +178,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                           'Metric Floor': config.metric_floor, 'Fresh Reference Score': 1.0})
             diagnostics.append(event)
 
-        snapshot(start, held, initial_signal, 'initial', signal_score=data.scores[initial_signal, held])
+        snapshot(start, held, initial_signal, 'initial', signal_score=ranking[initial_signal, held])
         for i in range(start, stop):
             date = data.dates[i]
             return_fund = data.tickers[held]
@@ -201,7 +197,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                 trading_cost += nav * config.cost_bps / 10000
                 nav *= 1 - config.cost_bps / 10000
                 pending = None
-            if i > start and (config.review == 'daily' or date in reviews):
+            if i > start and date in reviews:
                 held_score = data.scores[i, held]
                 age = i - last_trade
                 eligible = eligibility[i]
@@ -211,19 +207,19 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                 available = np.flatnonzero(eligible)
                 if not len(available):
                     raise ValueError(f'No eligible funds on {date.date()}')
-                best = int(rank_candidates(data.scores[i], eligible, data.tickers, [held])[0])
+                best = int(rank_candidates(ranking[i], eligible, data.tickers, [held])[0])
                 action = 'hold'
                 if fired:
                     action = 'no_switch' if best == held else 'switch'
                     if best != held:
                         if config.execution_lag:
                             if i + 1 < stop:
-                                pending = (best, i, data.scores[i, best])
+                                pending = (best, i, ranking[i, best])
                                 action = 'scheduled'
                             else:
                                 action = 'unexecuted_end'
                         else:
-                            snapshot(i, best, i, 'switch', data.tickers[held], data.scores[i, best])
+                            snapshot(i, best, i, 'switch', data.tickers[held], ranking[i, best])
                             trading_cost += nav * config.cost_bps / 10000
                             nav *= 1 - config.cost_bps / 10000
                             switches += 1
@@ -231,7 +227,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                 decisions.append({'Strategy ID': strategy_id, 'Review ID': review_id,
                                   'Cohort': cohort.title(), 'Date': date, 'Held Fund': data.tickers[held],
                                   'Held Score': held_score, 'Best Fund': data.tickers[best],
-                                  'Best Score': data.scores[i, best], 'Holding Days': age,
+                                  'Best Score': ranking[i, best], 'Selection': config.selection, 'Holding Days': age,
                                   'Triggered': fired, 'Action': action,
                                   'Threshold': config.threshold, 'Comparator': config.comparator,
                                   'ECR Signal': ecr_signal, 'Buffer Signal': buffer_signal,
@@ -242,12 +238,12 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                                   'Metric Fraction of Fresh': buffer_panel[i, held],
                                   'Trigger': config.trigger})
                 if config.candidate_audit:
-                    order = sorted(available, key=lambda j: (-data.scores[i, j], j != held, data.tickers[j]))
+                    order = rank_candidates(ranking[i], eligible, data.tickers, [held])
                     ranks = {j: n + 1 for n, j in enumerate(order)}
                     for j, ticker in enumerate(data.tickers):
                         candidates.append({'Strategy ID': strategy_id, 'Review ID': review_id,
                                            'Cohort': cohort.title(), 'Date': date, 'Fund': ticker,
-                                           'ECR': data.scores[i, j], 'Eligible': bool(eligible[j]),
+                                           'ECR': data.scores[i, j], 'Selection': config.selection, 'Selection Score': ranking[i, j], 'Eligible': bool(eligible[j]),
                                            'Rank': ranks.get(j), 'Best': j == best, 'Action': action})
                 if action == 'switch':
                     held, last_trade = best, i

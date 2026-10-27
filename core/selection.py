@@ -11,7 +11,7 @@ def rank_candidates(scores, eligible, tickers, preferred=()):
 def replacement_plan(held, triggered_positions, scores, eligible, tickers):
     """Jointly rank free candidates; preserve untouched positions and unique tickers.
 
-    Triggered incumbents may remain if still among the top available ECR funds.
+    Triggered incumbents may remain if still among the top available funds.
     Exact ties retain incumbents. Insufficient alternatives produce an explicit no-op.
     """
     triggered = sorted(triggered_positions)
@@ -28,3 +28,9 @@ def replacement_plan(held, triggered_positions, scores, eligible, tickers):
         if slot not in plan:
             plan[slot] = replacements.pop(0) if replacements else held[slot]
     return plan
+
+
+def selection_panel(data, selection):
+    """Return the ranking metric without changing ECR or trigger calculations."""
+    return {'highest_ecr': data.scores, 'highest_dbb': data.dbb,
+            'highest_buffer_integrity': data.buffers, 'highest_cap_integrity': data.caps}[selection]

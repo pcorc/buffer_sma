@@ -56,8 +56,8 @@ class BacktestConfig:
             raise ValueError('client_name must be a nonempty string')
         if isinstance(self.portfolio_size, bool) or not isinstance(self.portfolio_size, int) or not 1 <= self.portfolio_size <= 12:
             raise ValueError('portfolio_size must be an integer from 1 to 12')
-        if self.selection != 'highest_ecr':
-            raise ValueError('selection must be highest_ecr')
+        if self.selection not in ('highest_ecr', 'highest_dbb', 'highest_buffer_integrity', 'highest_cap_integrity'):
+            raise ValueError('Unknown selection metric')
         if self.portfolio_size > 1 and self.initial_selection != 'highest_score':
             raise ValueError('Multi-fund portfolios require initial_selection=highest_score')
         if self.initial_selection not in ('cohort', 'highest_score'):
@@ -74,8 +74,8 @@ class BacktestConfig:
             raise ValueError('threshold must be finite and nonnegative')
         if self.comparator not in ('<', '<='):
             raise ValueError('comparator must be < or <=')
-        if self.review not in ('daily', 'monthly'):
-            raise ValueError('review must be daily or monthly')
+        if self.review not in ('daily', 'monthly', 'quarterly', 'semiannual', 'annual'):
+            raise ValueError('Unknown review cadence')
         for name in ('min_holding_days', 'min_remaining_days'):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:

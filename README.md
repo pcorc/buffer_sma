@@ -34,8 +34,44 @@ python main.py --metrics "/path/to/methodology.xlsx"
 
 `--help` lists every model lever. JSON config accepts `score` and `backtest`
 objects; command-line arguments override JSON values. Models/configurations are
-never inferred from encoded function names. ECR is used for both the held
-fund's trigger and candidate selection.
+never inferred from encoded function names. Selection and trigger are independent:
+ECR is the default ranking, with DBB, Buffer Integrity and Cap Integrity available
+for component-ranking experiments.
+
+## Backtest Studio — browser interface
+
+```bash
+python -m pip install -r requirements-app.txt
+python -m streamlit run app.py
+```
+
+Open the local URL printed by Streamlit (normally http://localhost:8501).
+In the prepared cloud workspace, use `/workspace/buffer_sma-env/bin/python`.
+The app is local; no account or API keys are required.
+
+Start with **Super Buffer** or **UCITS Conservative**, then follow the numbered
+cards: portfolio → cadence → selection → trigger → test window. All core choices
+stay visible alongside a live strategy summary. The presets remain unchanged;
+editing a card creates a custom run. **Results** provides return, drawdown,
+per-holding trigger and allocation charts, a review log, and Excel/ZIP downloads.
+The ZIP includes PNGs, offline interactive HTML, CSVs, source hashes and replayable
+JSON. Extract the whole ZIP before opening its HTML files.
+
+Selection supports `highest_ecr`, `highest_dbb`, `highest_buffer_integrity` and
+`highest_cap_integrity`, for both initial entry and replacements. Review supports
+`monthly`, `quarterly` (Mar/Jun/Sep/Dec), `semiannual` (Jun/Dec) and `annual` (Dec),
+using the supplied holiday-adjusted monthly roll dates. These are trigger checks,
+not forced rotations or portfolio-wide weight resets. The CLI also retains daily
+review and the workbook's named-cohort initial-entry option.
+
+ECR trigger choices are **1, 1.5, 2**. Component floors are fractions of ideal
+fresh score **1.00**, e.g. **0.80**; thresholds above 1 would not describe component
+deterioration. The UI uses strict `<`. The multiplicative ECR formula and both
+client presets are retained. Advanced sections expose execution/costs, holding
+and eligibility limits, candidate auditing and formula parameters.
+
+See [the app guide](documents/backtest-studio.md) for assumptions, downloads,
+validation, and suggested next improvements.
 
 ## Exact scoring model
 
@@ -64,12 +100,12 @@ held-fund prices or invalid held scores on review dates fail the run.
 
 - Default: monthly review on the supplied holiday-adjusted option-cycle calendar,
   held ECR **<= 1.5**, with no additional minimum holding period.
-- Available alternatives: daily review, strict `<`, arbitrary nonnegative
+- Available alternatives: daily, quarterly, semiannual or annual review, strict `<`, arbitrary nonnegative
   threshold, minimum trading sessions held, and minimum remaining outcome days.
 - Each cohort enters its named F-series fund on the first available trading
   session after its first qualifying monthly cycle. Default earliest start is
   2021-01-19. This reproduces all twelve workbook cohort starts.
-- On review, pick the highest eligible ECR. Exact ties keep the current
+- On a triggered review, pick the highest eligible selection score (ECR by default). Exact ties keep the current
   holding; other ties use alphabetical ticker order. Picking the current fund
   does not create a switch or restart the holding clock.
 - Daily returns first accrue to the fund held coming into that close. The
@@ -172,7 +208,7 @@ New controls (also accepted by CLI and JSON):
   same. With next-close execution, highest-score initialization uses the previous
   observed session's scores; it fails if no prior session exists.
 - `trigger`: `ecr`, `buffer_drop`, `ecr_or_buffer`, or `ecr_and_buffer`.
-- `buffer_metric`: `buffer_integrity` (default) or `dbb`.
+- `buffer_metric`: `buffer_integrity` (default), `dbb` or `cap_integrity`.
 - `buffer_drop`: relative deterioration from the execution-date entry metric;
   default 0.20 means 20%, not 20 percentage points. The anchor resets on an actual
   switch, not on a no-op review. A zero entry metric has no relative-drop signal.

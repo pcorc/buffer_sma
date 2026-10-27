@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 
 from backtesting.engine import DIAGNOSTIC_MAP, _start_index, trigger_signals
-from core.selection import rank_candidates, replacement_plan
+from backtesting.schedule import review_dates
+from core.selection import rank_candidates, replacement_plan, selection_panel
 
 
 def simulate_portfolio(data, config):
@@ -20,10 +21,10 @@ def simulate_portfolio(data, config):
     if pd.Timestamp(config.start_date) > end:
         raise ValueError('start_date is after end_date')
     stop = int(data.dates.searchsorted(end, side='right'))
-    eligibility = (np.isfinite(data.scores) & np.isfinite(data.nav) & (data.nav > 0)
+    ranking = selection_panel(data, config.selection)
+    eligibility = (np.isfinite(data.scores) & np.isfinite(ranking) & np.isfinite(data.nav) & (data.nav > 0)
                    & (data.days >= config.min_remaining_days))
     metric = {'buffer_integrity': data.buffers, 'dbb': data.dbb, 'cap_integrity': data.caps}[config.buffer_metric]
-    reviews = set(data.cycles)
     diagnostics, decisions, candidates, daily, holdings, summaries = [], [], [], [], [], []
 
     for cohort in config.cohorts:
@@ -33,18 +34,12 @@ def simulate_portfolio(data, config):
         signal_i = start - config.execution_lag
         if signal_i < 0:
             raise ValueError('No prior session for initial selection signal')
-        ranked = rank_candidates(data.scores[signal_i], eligibility[signal_i], data.tickers)
+        ranked = rank_candidates(ranking[signal_i], eligibility[signal_i], data.tickers)
         if len(ranked) < n:
             raise ValueError(f'{cohort}: requested {n} funds, only {len(ranked)} eligible on {data.dates[signal_i].date()}')
         held = np.array(ranked[:n], dtype=int)
         initial = held.copy()
-        if config.review == 'monthly':
-            expected = pd.period_range(data.dates[start], data.dates[stop-1], freq='M')
-            if not set(expected).issubset(set(data.cycles.to_period('M'))):
-                raise ValueError('Monthly cycle calendar does not cover the requested period')
-            for cycle in data.cycles:
-                if data.dates[start] <= cycle <= data.dates[stop-1] and cycle not in data.dates:
-                    raise ValueError(f'No observation on cycle date {cycle.date()}; check holiday calendar')
+        reviews = review_dates(data.dates, data.cycles, start, stop, config.review)
         bench = data.benchmarks[start:stop]
         if not np.isfinite(bench[[0, -1]]).all() or (bench <= 0).any():
             raise ValueError(f'Missing benchmark endpoint or invalid NAV for {cohort}')
@@ -75,7 +70,7 @@ def simulate_portfolio(data, config):
             event.update({'Strategy ID': strategy_id, 'Event ID': f'{strategy_id}/{cohort}/{event_number}',
                           'Position': slot+1, 'Portfolio Size': n, 'Event Type': event_type,
                           'Signal Date': data.dates[signal_index], 'Execution Date': data.dates[i],
-                          'From Fund': outgoing, 'Selection Score at Signal': data.scores[signal_index, fund],
+                          'From Fund': outgoing, 'Selection Score at Signal': ranking[signal_index, fund], 'Selection': config.selection,
                           'Threshold': config.threshold, 'Comparator': config.comparator,
                           'Review': config.review, 'Data ID': data.data_id, 'Model': 'ecr-ar-v1',
                           'Trigger': config.trigger, 'Buffer Metric': config.buffer_metric,
@@ -118,12 +113,12 @@ def simulate_portfolio(data, config):
                 plan, signal_index = pending
                 execute(plan, signal_index, i)
                 pending = None
-            if i > start and (config.review == 'daily' or date in reviews):
+            if i > start and date in reviews:
                 signals = [trigger_signals(data.scores[i, j], metric[i, j], entry_metric[slot], config)
                            for slot, j in enumerate(held)]
                 triggered = [slot for slot, sig in enumerate(signals)
                              if sig[0] and i-last_trade[slot] >= config.min_holding_days]
-                plan = replacement_plan(held, triggered, data.scores[i], eligibility[i], data.tickers)
+                plan = replacement_plan(held, triggered, ranking[i], eligibility[i], data.tickers)
                 review_id = f'{strategy_id}/{cohort}/review/{date.date()}'
                 for slot, fund in enumerate(held):
                     new = plan.get(slot, fund)
@@ -135,7 +130,7 @@ def simulate_portfolio(data, config):
                     decisions.append({'Strategy ID': strategy_id, 'Review ID': review_id, 'Position': slot+1,
                                       'Cohort': cohort.title(), 'Date': date, 'Held Fund': data.tickers[fund],
                                       'Held Score': data.scores[i, fund], 'Best Fund': data.tickers[new],
-                                      'Best Score': data.scores[i, new], 'Holding Days': i-last_trade[slot],
+                                      'Best Score': ranking[i, new], 'Selection': config.selection, 'Holding Days': i-last_trade[slot],
                                       'Triggered': slot in triggered, 'Action': action, 'Trigger': config.trigger,
                                       'ECR Signal': ecr_signal, 'Buffer Signal': buffer_signal,
                                       'Buffer Metric': config.buffer_metric, 'Held Buffer Score': metric[i, fund],
@@ -144,13 +139,13 @@ def simulate_portfolio(data, config):
                                       'Fresh Reference Score': 1., 'Metric Fraction of Fresh': metric[i, fund],
                                       'Threshold': config.threshold, 'Comparator': config.comparator})
                 if config.candidate_audit:
-                    ranked = rank_candidates(data.scores[i], eligibility[i], data.tickers, held)
+                    ranked = rank_candidates(ranking[i], eligibility[i], data.tickers, held)
                     ranks = {j: rank+1 for rank,j in enumerate(ranked)}
                     retained = {j for slot,j in enumerate(held) if slot not in triggered}
                     for j,ticker in enumerate(data.tickers):
                         candidates.append({'Strategy ID': strategy_id, 'Review ID': review_id,
                                            'Cohort': cohort.title(), 'Date': date, 'Fund': ticker,
-                                           'ECR': data.scores[i,j], 'Eligible': bool(eligibility[i,j]),
+                                           'ECR': data.scores[i,j], 'Selection': config.selection, 'Selection Score': ranking[i,j], 'Eligible': bool(eligibility[i,j]),
                                            'Rank': ranks.get(j), 'Retained Position': j in retained,
                                            'Selected': j in plan.values(), 'Available for Replacement': j not in retained,
                                            'Current Holding': j in held})

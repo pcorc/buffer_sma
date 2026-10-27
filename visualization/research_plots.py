@@ -8,37 +8,37 @@ def dashboard(result, cohort='Jan'):
     events = result['diagnostics'].query('Cohort == @cohort')
     if daily.empty:
         raise ValueError(f'No cohort {cohort}')
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
-                        subplot_titles=('NAV and executed switches', 'Drawdown', 'Held buffer score versus entry anchor'))
+    config = result['parameters']['backtest']
+    is_ecr = config['trigger'] == 'ecr'
+    metric_label = 'ECR' if is_ecr else config['buffer_metric'].replace('_', ' ').title()
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=.09,
+                        subplot_titles=('Growth of 100', 'Drawdown', f'{metric_label} · per holding'))
     for column in ['Strategy NAV', 'SPY NAV', 'BUFR NAV', 'Hold NAV']:
-        fig.add_trace(go.Scatter(x=daily.Date, y=daily[column], name=column), row=1, col=1)
+        fig.add_trace(go.Scatter(x=daily.Date, y=daily[column], name=column.replace(' NAV', ''),
+                                line=dict(width=3 if column == 'Strategy NAV' else 1.5)), row=1, col=1)
     marked = events.merge(daily[['Date', 'Strategy NAV']], on='Date', validate='many_to_one')
     fig.add_trace(go.Scatter(x=marked.Date, y=marked['Strategy NAV'], mode='markers',
-                            marker=dict(symbol='diamond', size=9), text=marked.Fund,
+                            marker=dict(symbol='diamond', size=7, color='#147D73'), text=marked.Fund,
                             name='Entry / switch', hovertemplate='%{x}<br>%{text}<extra></extra>'), row=1, col=1)
-    drawdown = daily['Strategy NAV'] / daily['Strategy NAV'].cummax() - 1
-    fig.add_trace(go.Scatter(x=daily.Date, y=drawdown, name='Strategy drawdown', fill='tozeroy'), row=2, col=1)
-    drop = result['parameters']['backtest']['buffer_drop']
-    config = result['parameters']['backtest']
-    floor = (daily['Entry Buffer Score'] * 0 + config['metric_floor'] if config['trigger'] == 'metric_floor'
-             else daily['Entry Buffer Score'] * (1-drop))
-    if config['portfolio_size'] > 1:
-        positions = result['holdings'].query('Cohort == @cohort')
-        for slot, frame in positions.groupby('Position'):
-            fig.add_trace(go.Scatter(x=frame.Date, y=frame['Held Buffer Score'],
-                                    text=frame.Fund, name=f'Position {slot} / {config["buffer_metric"]}',
-                                    hovertemplate='%{x}<br>%{text}: %{y:.3f}<extra></extra>'), row=3, col=1)
-            if config['trigger'] != 'metric_floor':
-                fig.add_trace(go.Scatter(x=frame.Date, y=frame['Entry Buffer Score']*(1-drop),
-                                        name=f'Position {slot} entry-relative floor', line=dict(dash='dot')), row=3, col=1)
-        if config['trigger'] == 'metric_floor':
-            fig.add_trace(go.Scatter(x=daily.Date, y=floor, name='Buffer integrity floor', line=dict(dash='dot')), row=3, col=1)
-    else:
-        for name, values in [(config['buffer_metric'], daily['Held Buffer Score']), ('Trigger floor', floor)]:
-            fig.add_trace(go.Scatter(x=daily.Date, y=values, name=name), row=3, col=1)
+    for column, color in [('Strategy NAV', '#147D73'), ('BUFR NAV', '#8F9BA8')]:
+        drawdown = daily[column] / daily[column].cummax() - 1
+        fig.add_trace(go.Scatter(x=daily.Date, y=drawdown, name=column.replace(' NAV', '')+' drawdown',
+                                line=dict(color=color), fill='tozeroy' if column=='Strategy NAV' else None), row=2, col=1)
+    positions = result['holdings'].query('Cohort == @cohort')
+    for slot, frame in positions.groupby('Position'):
+        fig.add_trace(go.Scatter(x=frame.Date, y=frame['Held ECR Score' if is_ecr else 'Held Buffer Score'],
+                                text=frame.Fund, name=f'Position {slot} / {metric_label}',
+                                hovertemplate='%{x}<br>%{text}: %{y:.3f}<extra></extra>'), row=3, col=1)
+        if config['trigger'] not in ('ecr', 'metric_floor'):
+            fig.add_trace(go.Scatter(x=frame.Date, y=frame['Entry Buffer Score']*(1-config['buffer_drop']),
+                                    name=f'Position {slot} entry-relative floor', line=dict(dash='dot')), row=3, col=1)
+    if config['trigger'] in ('ecr', 'metric_floor'):
+        threshold = config['threshold'] if is_ecr else config['metric_floor']
+        fig.add_hline(y=threshold, line_dash='dot', line_color='#CB7A43', row=3, col=1,
+                      annotation_text=f'Trigger <{ "=" if config["comparator"] == "<=" else ""} {threshold:g}')
     fig.update_layout(height=900, title=f'{config["client_name"]} — {cohort} — N={config["portfolio_size"]}', hovermode='x unified')
     fig.update_yaxes(tickformat='.0%', row=2, col=1)
-    return fig
+    return style_figure(fig)
 
 
 def holdings_figure(result, cohort='Jan'):
@@ -50,7 +50,7 @@ def holdings_figure(result, cohort='Jan'):
                                 hovertemplate='%{x}<br>%{y:.1%}<extra>%{fullData.name}</extra>'))
     fig.update_layout(title=f'Actual portfolio weights — {cohort}', yaxis_tickformat='.0%',
                       yaxis_range=[0, 1], height=450, hovermode='x unified')
-    return fig
+    return style_figure(fig)
 
 
 def comparison_figures(results, table):
@@ -68,3 +68,14 @@ def comparison_figures(results, table):
                           xaxis_title='Worst cohort drawdown magnitude', yaxis_title='Mean cumulative excess vs BUFR')
     tradeoff.update_xaxes(tickformat='.0%'); tradeoff.update_yaxes(tickformat='.0%')
     return heatmap, tradeoff
+
+
+def style_figure(fig):
+    fig.update_layout(template='plotly_white', paper_bgcolor='white', plot_bgcolor='white',
+                      font=dict(family='Arial, sans-serif', color='#34495A'),
+                      colorway=['#147D73', '#9AA7B4', '#5789B1', '#C99D5B', '#8578AD', '#CE8475'],
+                      margin=dict(l=30, r=25, t=65, b=40),
+                      legend=dict(orientation='h', y=-.09, x=0), hovermode='x unified')
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(gridcolor='#EEF1F4', zerolinecolor='#E2E8ED')
+    return fig
