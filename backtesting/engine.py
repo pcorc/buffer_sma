@@ -40,11 +40,16 @@ class PreparedData:
     caps: np.ndarray
 
 
-def prepare_data(metrics, benchmarks, cycles, score_config=ScoreConfig()):
-    # Only the F-series universe is supported; remove unrelated assets once.
-    frame = metrics.loc[metrics.ticker.isin(['F' + c for c in MONTHS])].copy()
+def prepare_data(metrics, benchmarks, cycles, score_config=ScoreConfig(), universe=None):
+    # Default remains the original F-series universe for workbook compatibility.
+    selected = list(universe) if universe is not None else ['F' + c for c in MONTHS]
+    if universe is not None:
+        missing = set(selected) - set(metrics.ticker)
+        if missing:
+            raise ValueError(f'No history for selected tickers: {sorted(missing)}')
+    frame = metrics.loc[metrics.ticker.isin(selected)].copy()
     if frame.empty:
-        raise ValueError('No F-series observations')
+        raise ValueError('No observations for the selected universe')
     if frame.duplicated(['date', 'ticker']).any():
         raise ValueError('Duplicate ticker/date observations')
     frame = frame.sort_values(['date', 'ticker']).reset_index(drop=True)
@@ -103,6 +108,8 @@ def _start_index(data, cohort, config):
 
 
 def simulate(data: PreparedData, config=BacktestConfig()):
+    if config.universe is not None and set(data.tickers) != set(config.universe):
+        raise ValueError('Prepared data does not match the configured universe')
     if config.portfolio_size > 1 or turnover_controls_enabled(config):
         from backtesting.portfolio import simulate_portfolio
         return simulate_portfolio(data, config)
@@ -124,9 +131,12 @@ def simulate(data: PreparedData, config=BacktestConfig()):
 
     for cohort in config.cohorts:
         initial_fund = 'F' + cohort
-        if initial_fund not in data.tickers:
-            raise ValueError(f'Missing cohort fund {initial_fund}')
-        held = initial = data.tickers.index(initial_fund)
+        if config.initial_selection == 'cohort' or config.universe is None:
+            if initial_fund not in data.tickers:
+                raise ValueError(f'Missing cohort fund {initial_fund}')
+            held = initial = data.tickers.index(initial_fund)
+        else:
+            held = initial = 0
         start = _start_index(data, cohort, config)
         if start >= stop:
             raise ValueError(f'No observations in requested period for {cohort}')
@@ -140,6 +150,8 @@ def simulate(data: PreparedData, config=BacktestConfig()):
             if not len(available):
                 raise ValueError('No eligible initial candidates')
             held = int(rank_candidates(ranking[initial_signal], eligibility[initial_signal], data.tickers)[0])
+        if config.universe is not None and config.initial_selection == 'highest_score':
+            initial = held
         reviews = review_dates(data.dates, data.cycles, start, stop, config.review)
         bench = data.benchmarks[start:stop]
         if not np.isfinite(bench[[0, -1]]).all() or (bench <= 0).any():

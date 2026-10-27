@@ -18,9 +18,9 @@ def dashboard(result, cohort='Jan'):
                                 line=dict(width=3 if column == 'Strategy NAV' else 1.5)), row=1, col=1)
     marked = events.merge(daily[['Date', 'Strategy NAV']], on='Date', validate='many_to_one')
     fig.add_trace(go.Scatter(x=marked.Date, y=marked['Strategy NAV'], mode='markers',
-                            marker=dict(symbol='diamond', size=7, color='#147D73'), text=marked.Fund,
+                            marker=dict(symbol='diamond', size=7, color='#1B3442'), text=marked.Fund,
                             name='Entry / switch', hovertemplate='%{x}<br>%{text}<extra></extra>'), row=1, col=1)
-    for column, color in [('Strategy NAV', '#147D73'), ('BUFR NAV', '#8F9BA8')]:
+    for column, color in [('Strategy NAV', '#1B3442'), ('BUFR NAV', '#8F9BA8')]:
         drawdown = daily[column] / daily[column].cummax() - 1
         fig.add_trace(go.Scatter(x=daily.Date, y=drawdown, name=column.replace(' NAV', '')+' drawdown',
                                 line=dict(color=color), fill='tozeroy' if column=='Strategy NAV' else None), row=2, col=1)
@@ -73,7 +73,7 @@ def comparison_figures(results, table):
 def style_figure(fig):
     fig.update_layout(template='plotly_white', paper_bgcolor='white', plot_bgcolor='white',
                       font=dict(family='Arial, sans-serif', color='#34495A'),
-                      colorway=['#147D73', '#9AA7B4', '#5789B1', '#C99D5B', '#8578AD', '#CE8475'],
+                      colorway=['#1B3442', '#9AA7B4', '#5789B1', '#EAAA43', '#8578AD', '#CE8475'],
                       margin=dict(l=30, r=25, t=65, b=40),
                       legend=dict(orientation='h', y=-.09, x=0), hovermode='x unified')
     fig.update_xaxes(showgrid=False)

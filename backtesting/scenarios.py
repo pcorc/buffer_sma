@@ -7,7 +7,7 @@ from config.settings import BacktestConfig, ScoreConfig
 
 def conservative_suite(backtest=None):
     """35 scenarios with shared windows/costs; ECR always selects the replacement."""
-    base = backtest or BacktestConfig(execution_lag=1, cost_bps=5)
+    base = backtest or BacktestConfig(execution_lag=1, cost_bps=0)
     base = replace(base, initial_selection='highest_score', selection='highest_ecr', comparator='<',
                    candidate_audit=False, review='monthly', min_holding_days=0,
                    confirmation_reviews=1, min_selection_improvement=0, entry_metric_margin=0,

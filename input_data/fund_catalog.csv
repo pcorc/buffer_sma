@@ -1,0 +1,13 @@
+ticker,series,group,outcome_type,outcome_month,strategy,buffer_start,buffer_end,reference_asset,currency
+FJAN,F,US ETFs,Annual,JAN,Buffer,0,0.1,SPY,USD
+FFEB,F,US ETFs,Annual,FEB,Buffer,0,0.1,SPY,USD
+FMAR,F,US ETFs,Annual,MAR,Buffer,0,0.1,SPY,USD
+FAPR,F,US ETFs,Annual,APR,Buffer,0,0.1,SPY,USD
+FMAY,F,US ETFs,Annual,MAY,Buffer,0,0.1,SPY,USD
+FJUN,F,US ETFs,Annual,JUN,Buffer,0,0.1,SPY,USD
+FJUL,F,US ETFs,Annual,JUL,Buffer,0,0.1,SPY,USD
+FAUG,F,US ETFs,Annual,AUG,Buffer,0,0.1,SPY,USD
+FSEP,F,US ETFs,Annual,SEP,Buffer,0,0.1,SPY,USD
+FOCT,F,US ETFs,Annual,OCT,Buffer,0,0.1,SPY,USD
+FNOV,F,US ETFs,Annual,NOV,Buffer,0,0.1,SPY,USD
+FDEC,F,US ETFs,Annual,DEC,Buffer,0,0.1,SPY,USD

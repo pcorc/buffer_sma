@@ -7,11 +7,12 @@
     "threshold": 1.5,
     "comparator": "<",
     "execution_lag": 1,
-    "cost_bps": 5,
+    "cost_bps": 0,
     "buffer_metric": "buffer_integrity",
     "metric_floor": 0.8,
     "client_name": "Super Buffer",
     "portfolio_size": 1,
-    "selection": "highest_ecr"
+    "selection": "highest_ecr",
+    "min_holding_days": 0
   }
 }

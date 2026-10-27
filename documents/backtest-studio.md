@@ -9,7 +9,7 @@ uses the same engine, inputs and report exporters as the CLI and notebook.
 1. Choose a client preset and give the run a name. Super Buffer starts with one
    fund and ECR < 1.5; UCITS Conservative starts with three funds and Buffer
    Integrity < 0.80. Both use highest ECR selection, monthly reviews, next-close
-   execution and a 5 bps replacement cost.
+   execution, zero trading cost and zero minimum holding days.
 2. Choose **Single ticker** or **Fund of funds**, with N from 2 to 12 for FoF.
    N stays fixed throughout a run. Initial capital is split equally; subsequent
    weights drift. Only breached holdings are reconsidered, with their proceeds
@@ -52,8 +52,9 @@ chosen component trigger, including DBB or Cap Integrity.
 
 The results page belongs to the last completed run. Editing configuration does
 not relabel or modify prior results. Rerun to apply edits; a failed run leaves the
-previous results intact. Results are kept in the browser's Streamlit session;
-download them before closing/restarting the session.
+previous results intact. Completed runs are automatically archived to the configured
+folder on the machine running the app. If archiving fails, the results stay in the
+Streamlit session and can still be downloaded as a ZIP.
 
 - **Excel:** Summary, Daily NAV, ECR Diagnostics, Review Decisions, Candidate Audit,
   Portfolio Holdings and Run Manifest. Entry/switch snapshots retain all ECR
@@ -65,8 +66,9 @@ download them before closing/restarting the session.
   `python main.py --config /path/to/config.json`. Save configuration is also
   available before running. Client presets in the repository are not overwritten.
 
-The standard benchmarks are SPY, BUFR and Hold NAV. Single-ticker Hold NAV is the
-launch month's original fund; FoF Hold NAV is the initial equal-weight basket.
+The standard benchmarks are SPY, BUFR and Hold NAV. With the app's explicit universe, Hold NAV is the initially selected fund or
+equal-weight basket. Legacy CLI configurations without an explicit universe retain
+the named-cohort single-fund benchmark.
 Missing interior benchmark sessions appear as gaps and are disclosed in the
 results. Invalid benchmark endpoints or missing held prices fail the run.
 
@@ -82,15 +84,14 @@ show daily values; only scheduled review observations can trigger replacements.
 - **Conservative objectives:** compare maximum drawdown, downside deviation,
   Sortino and turnover alongside returns. More holdings alone does not guarantee
   lower drawdown.
-- **Eligibility:** the current universe is the 12 repository F-series funds.
-  A client-specific eligible universe, liquidity screens and concentration
-  limits would be useful next controls.
+- **Eligibility:** custom universe filters now constrain initial and replacement
+  selection. Only F-series history is loaded; liquidity screens remain future work.
 - **Portfolio policy:** equal initial capital and per-breach replacements are
   explicit assumptions. Weight caps, cash handling and forced full rebalancing
   would each require a distinct tested policy.
 - **Reuse:** JSON exports are reproducible through the CLI. A saved-run library,
   JSON import and side-by-side UI comparison would make repeated client research
-  easier. Current results are session-local rather than a shared run database.
+  easier. Runs are archived as folders rather than stored in a searchable run database.
 
 ## Validation
 
@@ -110,3 +111,10 @@ replayable JSON. [The conservative research guide](conservative-research.md)
 defines every rule and shows how to run all comparisons. The original client
 presets still have these controls off. Weight-only events are exported separately
 from fund replacement diagnostics.
+
+## Universe catalogue and shared-drive archives
+
+See [universes and archives](universes-and-archives.md) for the catalogue schema,
+future-data workflow, annual/quarterly settings, launch-date examples and Windows
+archive behavior. The visual styling follows the supplied navy/gold/cream reference
+without depending on the existing website framework.

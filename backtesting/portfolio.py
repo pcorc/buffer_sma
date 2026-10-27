@@ -46,7 +46,7 @@ def simulate_portfolio(data, config):
         if n == 1 and config.initial_selection == 'cohort':
             held[0] = data.tickers.index('F' + cohort)
         initial = held.copy()
-        if n == 1:
+        if n == 1 and config.universe is None:
             initial[0] = data.tickers.index('F' + cohort)
         reviews = review_dates(data.dates, data.cycles, start, stop, config.review)
         bench = data.benchmarks[start:stop]

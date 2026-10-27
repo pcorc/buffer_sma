@@ -34,6 +34,7 @@ class BacktestConfig:
     client_name: str = 'Research'
     portfolio_size: int = 1
     selection: str = 'highest_ecr'
+    universe: tuple[str, ...] | None = None
     threshold: float = 1.5
     comparator: str = '<='
     review: str = 'monthly'
@@ -59,6 +60,14 @@ class BacktestConfig:
     weight_band: float | None = None
 
     def __post_init__(self):
+        if self.universe is not None:
+            if isinstance(self.universe, str):
+                raise ValueError('Universe must be a list or tuple of ticker symbols')
+            object.__setattr__(self, 'universe', tuple(self.universe))
+            if not self.universe or len(set(self.universe)) != len(self.universe):
+                raise ValueError('Universe must contain unique tickers and cannot be empty')
+            if any(not isinstance(t, str) or not t.strip() or t != t.strip().upper() for t in self.universe):
+                raise ValueError('Universe tickers must be nonempty uppercase strings')
         for name in ('confirmation_reviews', 'reentry_cooldown_days', 'max_replacements_per_review'):
             value = getattr(self, name)
             minimum = 1 if name == 'confirmation_reviews' else 0

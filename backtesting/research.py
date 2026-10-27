@@ -34,18 +34,19 @@ class ResearchSession:
         self._prepared = OrderedDict()
         self.score_builds = 0
 
-    def prepare(self, config=ScoreConfig()):
-        if config not in self._prepared:
-            self._prepared[config] = prepare_data(self.metrics, self.benchmarks, self.cycles, config)
+    def prepare(self, config=ScoreConfig(), universe=None):
+        key = (config, tuple(universe) if universe is not None else None)
+        if key not in self._prepared:
+            self._prepared[key] = prepare_data(self.metrics, self.benchmarks, self.cycles, config, universe=universe)
             self.score_builds += 1
             if len(self._prepared) > 8:
                 self._prepared.popitem(last=False)
-        self._prepared.move_to_end(config)
-        return self._prepared[config]
+        self._prepared.move_to_end(key)
+        return self._prepared[key]
 
     def run(self, score=ScoreConfig(), backtest=BacktestConfig()):
         t = time.perf_counter()
-        data = self.prepare(score)
+        data = self.prepare(score, backtest.universe)
         prepared = time.perf_counter()
         result = simulate(data, backtest)
         result['timings'] = {'prepare_seconds': prepared-t, 'simulate_seconds': time.perf_counter()-prepared}

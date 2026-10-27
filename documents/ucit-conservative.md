@@ -30,7 +30,7 @@ python main.py --trigger metric_floor --buffer-metric buffer_integrity --metric-
 ```
 
 The preset uses monthly review, a 0.80 floor, highest-ECR entry, next-close
-execution and 5 bp per executed switch. These settings can be adjusted without
+execution, zero trading cost and no minimum holding delay. These settings can be adjusted without
 changing the ECR selection formula.
 
 `notebooks/ecr_backtest.ipynb` compares four runs: the ECR-below-1.5 trigger as a

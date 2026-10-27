@@ -8,37 +8,60 @@ import streamlit as st
 
 from backtesting.engine import simulate
 from backtesting.scenarios import conservative_suite
+from core.universe import GROUPS, STRATEGIES, BUFFER_BANDS, filter_catalog, validate_universe
+from studio.archive import DEFAULT_ARCHIVE_ROOT, save_archive
 from config.settings import BacktestConfig, MONTHS, ScoreConfig
 from studio.service import (CADENCES, METRICS, SELECTIONS, SCHEDULE_NOTES, build_downloads,
-                            config_json, load_dataset, load_preset, source_signature, validate_window)
+                            config_json, load_dataset, load_preset, source_signature, validate_window, available_catalogue)
 from visualization.research_plots import dashboard, holdings_figure
 
 st.set_page_config(page_title='ECR · Backtest Studio', page_icon='◈', layout='wide')
 st.markdown('''<style>
-.block-container {max-width: 1440px; padding-top: 2rem; padding-bottom: 3rem;}
-h1 {font-size: 2.3rem !important; letter-spacing: -.07rem; font-weight: 650 !important;}
-h2 {font-size: 1.4rem !important; letter-spacing: -.025rem;}
-h3 {font-size: 1.08rem !important; font-weight: 600 !important;}
-[data-testid="stHeader"] {background: transparent;}
-[data-testid="stVerticalBlockBorderWrapper"] > div {border-radius: 14px;}
-[data-testid="stMetric"] {background:white; border:1px solid #E3E9ED; border-radius:12px; padding:18px;}
-[data-testid="stMetricLabel"] {color:#607383; font-size:.8rem;}
+.block-container {max-width:1440px; padding-top:1.5rem; padding-bottom:3rem;}
+h1,h2,h3 {color:#1B3442; letter-spacing:.01em;}
+h1 {font-size:2.5rem !important;} h2 {font-size:1.45rem !important;} h3 {font-size:1.08rem !important;}
+[data-testid="stHeader"] {background:transparent;}
+[data-testid="stCaptionContainer"] p {color:#536C7A !important;}
+[data-testid="stMetric"] {background:#F9EED7; border-top:3px solid #EAAA43; padding:18px;}
 [data-testid="stMetricValue"] {font-size:1.8rem;}
-[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {color:#596F7D !important;}
-.eyebrow {color:#147D73; letter-spacing:.16em; font-size:.73rem; font-weight:700; margin-bottom:12px;}
-.step {font-size:.72rem; color:#147D73; letter-spacing:.12em; font-weight:700; margin-bottom:6px;}
-.summary-item {padding:13px 0; border-bottom:1px solid #E8EDF1;}
-.summary-item span {display:block; font-size:.74rem; color:#718291; margin-bottom:3px;}
-.summary-item strong {font-size:.95rem; font-weight:600;}
-.pill {display:inline-block; color:#147D73; background:#E7F3F0; border-radius:30px; padding:5px 11px; font-size:.73rem;}
-.stButton > button, .stDownloadButton > button {border-radius:9px; min-height:2.8rem;}
+[data-testid="stExpander"] {background:#F5F4EF;}
+.eyebrow {color:#1B3442; border-bottom:2px solid #EAAA43; padding-bottom:10px; font-size:.8rem; font-weight:700; letter-spacing:.13em;}
+.step {font-size:.75rem; color:#86561F; letter-spacing:.12em; font-weight:700; margin-bottom:6px;}
+.summary-item {padding:12px 0; border-bottom:1px solid #DFE3E5;}
+.summary-item span {display:block; font-size:.75rem; color:#536C7A; margin-bottom:3px;}
+.summary-item strong {font-size:.94rem; font-weight:600;}
+.pill {display:inline-block; color:#1B3442; background:#F9EED7; padding:6px 12px; font-size:.8rem;}
+.hero {background:#F9EED7; padding:24px 30px; margin:18px 0 20px; border-left:4px solid #EAAA43;}
+.hero h1 {margin:0 0 8px;} .hero p {margin:0; color:#1B3442;}
+.stButton > button, .stDownloadButton > button {border-radius:3px; min-height:2.7rem;}
+button[kind="primary"] {background:#EAAA43 !important; color:#1B3442 !important; border-color:#EAAA43 !important; font-weight:700;}
 </style>''', unsafe_allow_html=True)
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
-def prepared_dataset(signature, score):
+def prepared_dataset(signature, score, universe=None):
     # The signature invalidates cached data when source files change.
-    return load_dataset(score)
+    return load_dataset(score, universe)
+
+
+@st.cache_data(show_spinner=False)
+def catalogue_for_ui(signature):
+    return available_catalogue()
+
+
+def apply_outcome_profile():
+    quarterly = st.session_state.universe_outcome == 'Quarterly'
+    st.session_state.score_period_center = 45. if quarterly else 180.
+    st.session_state.score_period_width = 18.75 if quarterly else 75.
+
+
+def apply_universe_group():
+    group = st.session_state.universe_group
+    if group == 'Quarterly structures':
+        st.session_state.universe_outcome = 'Quarterly'
+    elif group.endswith(' series'):
+        st.session_state.universe_outcome = 'Annual'
+    apply_outcome_profile()
 
 
 RESEARCH_PRESETS = {e.name: e for e in conservative_suite() if e.name.startswith('UCITS')}
@@ -63,6 +86,8 @@ def apply_preset():
               'use_bands': config.weight_band is not None, 'band_pp': float((config.weight_band if config.weight_band is not None else .05)*100)}
     values.update({'score_'+k: float(v) for k,v in asdict(score).items()})
     st.session_state.update(values)
+    if st.session_state.get('universe_outcome') == 'Quarterly':
+        apply_outcome_profile()
 
 
 if 'preset' not in st.session_state:
@@ -74,13 +99,12 @@ for key, value in {'confirmations': 1, 'score_gap': 0., 'entry_margin': 0., 'coo
                    'replacement_limit': 0, 'turnover_budget': 100., 'use_bands': False, 'band_pp': 5.}.items():
     st.session_state.setdefault(key, value)
 
-st.markdown('<div class="eyebrow">ECR / RESEARCH WORKSPACE</div>', unsafe_allow_html=True)
-head, badge = st.columns([5, 1])
-with head:
-    st.title('Backtest Studio')
-    st.write('Build a strategy. Understand its behavior. Export the evidence.')
-with badge:
-    st.markdown('<div class="pill">F-series · 12 funds</div>', unsafe_allow_html=True)
+st.session_state.setdefault('universe_group', 'F series')
+st.session_state.setdefault('universe_outcome', 'Annual')
+st.session_state.setdefault('archive_root', DEFAULT_ARCHIVE_ROOT)
+st.session_state.setdefault('archive_enabled', True)
+st.markdown('<div class="eyebrow">ECR / BACKTEST STUDIO</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero"><h1>Build an outcome portfolio.</h1><p>Choose your universe, define the rules, and evaluate the results.</p></div>', unsafe_allow_html=True)
 if 'view' not in st.session_state:
     st.session_state.view = 'Configure'
 if '_navigate' in st.session_state:
@@ -91,7 +115,9 @@ view = st.segmented_control('Workspace', ['Configure', 'Results'], key='view', l
 CONFIG_KEYS = ['preset', 'client', 'structure', 'fund_count', 'cadence', 'selection', 'trigger_metric',
                'ecr_threshold', 'component_threshold', 'lag', 'cost', 'holding_days', 'remaining_days',
                'audit', 'start', 'end', 'cohorts', 'confirmations', 'score_gap', 'entry_margin', 'cooldown',
-               'replacement_limit', 'turnover_budget', 'use_bands', 'band_pp'] + ['score_'+k for k in asdict(ScoreConfig())]
+               'replacement_limit', 'turnover_budget', 'use_bands', 'band_pp', 'universe_group', 'universe_outcome',
+               'fund_series', 'fund_strategies', 'fund_references', 'fund_months', 'buffer_band', 'selected_tickers',
+               'archive_root', 'archive_enabled'] + ['score_'+k for k in asdict(ScoreConfig())]
 for key in CONFIG_KEYS:
     if key in st.session_state:
         st.session_state[key] = st.session_state[key]
@@ -106,6 +132,13 @@ if view == 'Results':
     label = METRICS['ecr' if saved['trigger'] == 'ecr' else saved['buffer_metric']]
     floor = saved['threshold'] if saved['trigger'] == 'ecr' else saved['metric_floor']
     st.caption(f"Saved run · {saved['portfolio_size']} fund(s) · {CADENCES[saved['review']]} · {label} < {floor:g} → {SELECTIONS[saved['selection']]} · {result['strategy_id']}")
+    if st.session_state.get('archive_path'):
+        st.success('Results archived successfully.')
+        st.code(st.session_state.archive_path, language=None)
+    elif st.session_state.get('archive_error'):
+        st.warning('Archive was not saved: ' + st.session_state.archive_error + ' Your results and ZIP download remain available below.')
+    else:
+        st.caption('Automatic archiving was off for this run. Download the ZIP to keep a copy.')
     st.caption('These results reflect the settings used at execution. Configuration edits take effect on the next run.')
     cohorts = result['summary'].Cohort.tolist()
     cohort = st.selectbox('Launch cohort to display', cohorts, key='result_cohort',
@@ -121,9 +154,13 @@ if view == 'Results':
     st.caption(f"One-way turnover: {row['One-way Turnover']:.2f}× · Weight resets: {int(row.get('Weight Rebalances', 0))}. Detailed trades and any execution-budget deferrals are included in Excel.")
     if row['Missing Benchmark Sessions']:
         st.info(f"{int(row['Missing Benchmark Sessions'])} benchmark sessions are missing inside this window. Charts preserve those gaps; endpoint returns remain available.")
+    if 'universe' in result:
+        with st.expander('Fund universe used in this run'):
+            st.dataframe(result['universe'], hide_index=True, width='stretch')
     chart_tab, holdings_tab, decisions_tab = st.tabs(['Performance & triggers', 'Holdings', 'Review log'])
     with chart_tab:
         st.plotly_chart(dashboard(result, cohort), width='stretch', config={'displaylogo': False})
+        st.caption('Hold NAV shows the initially selected fund or basket held without trading.')
         st.caption('The trigger line is checked only on scheduled review dates. A breach can result in no trade if the incumbent still ranks highest.')
     with holdings_tab:
         st.plotly_chart(holdings_figure(result, cohort), width='stretch', config={'displaylogo': False})
@@ -159,6 +196,39 @@ with preset_col:
     st.selectbox('Start from a client preset', ['Super Buffer', 'UCITS Conservative', *RESEARCH_PRESETS], key='preset', on_change=apply_preset)
 with name_col:
     st.text_input('Run name', key='client', max_chars=100)
+
+with st.container(border=True):
+    st.markdown('<div class="step">FUND UNIVERSE</div>', unsafe_allow_html=True)
+    a, b = st.columns(2)
+    a.selectbox('Fund group', GROUPS, key='universe_group', on_change=apply_universe_group)
+    outcome = b.selectbox('Outcome period', ['Annual','Quarterly'], key='universe_outcome', on_change=apply_outcome_profile)
+    try:
+        catalogue = catalogue_for_ui(source_signature())
+    except (ValueError, OSError) as error:
+        st.error(f'Unable to load the fund catalogue: {error}')
+        st.stop()
+    with st.expander('Filter funds · series, strategy, reference asset and buffer'):
+        a,b,c = st.columns(3)
+        series = a.multiselect('Fund series', sorted(set(['F','D','G','S','Y','Q','B']) | set(catalogue.series)), key='fund_series', placeholder='All series')
+        strategies = b.multiselect('Strategy', sorted(set(STRATEGIES) | set(catalogue.strategy)), key='fund_strategies', placeholder='All strategies')
+        references = c.multiselect('Reference asset', sorted(set(['EEM','EFA','GLD','IWM','QQQ','RSP','SPY']) | set(catalogue.reference_asset)), key='fund_references', placeholder='All reference assets')
+        months = a.multiselect('Fund outcome month', [*MONTHS,'Quarterly'], key='fund_months', placeholder='All outcome months', help='Filters fund products. This is separate from the backtest launch month below.')
+        buffer_band = b.selectbox('Buffer category', BUFFER_BANDS, key='buffer_band')
+        c.caption('One broad buffer category keeps the list short. Exact ranges stay in the fund catalogue.')
+    matches = filter_catalog(catalogue, st.session_state.universe_group, outcome, series, strategies, references, months, buffer_band)
+    ready = matches.loc[matches.history_available]
+    matching_tickers = tuple(sorted(ready.ticker))
+    filter_identity = (st.session_state.universe_group, outcome, tuple(series), tuple(strategies), tuple(references), tuple(months), buffer_band, matching_tickers)
+    if st.session_state.get('_universe_filter') != filter_identity:
+        st.session_state.selected_tickers = list(matching_tickers)
+        st.session_state['_universe_filter'] = filter_identity
+    selected_tickers = st.multiselect('Funds included in this backtest', matching_tickers, key='selected_tickers', placeholder='No available funds match these filters')
+    if not matching_tickers:
+        st.info('No historical data is loaded for this selection yet. F-series annual funds are available now; other groups will become runnable when their catalogue records and history are added.')
+    else:
+        st.caption(f'{len(selected_tickers)} funds selected. Initial purchases and replacements are both restricted to this list.')
+    with st.expander('View matching fund details'):
+        st.dataframe(matches, hide_index=True, width='stretch')
 
 main, summary = st.columns([2.7, 1], gap='large')
 with main:
@@ -201,7 +271,7 @@ with main:
         st.subheader('Choose the period and launch months')
         # Load the default panel only once; alternate scoring is prepared when running.
         try:
-            default_data, sources = prepared_dataset(source_signature(), ScoreConfig())
+            default_data, sources = prepared_dataset(source_signature(), ScoreConfig(), tuple(selected_tickers) if selected_tickers else None)
         except (ValueError, OSError) as error:
             st.error(f'Unable to load the repository data: {error}')
             st.stop()
@@ -211,6 +281,10 @@ with main:
             st.session_state.start = max(earliest, pd.Timestamp('2021-01-19').date())
         if 'end' not in st.session_state:
             st.session_state.end = latest
+        for date_key in ('start', 'end'):
+            value = st.session_state[date_key]
+            if value is not None:
+                st.session_state[date_key] = min(latest, max(earliest, value))
         if 'cohorts' not in st.session_state:
             st.session_state.cohorts = ['JAN']
         start = a.date_input('Start no earlier than', value=None,
@@ -218,15 +292,19 @@ with main:
         end = b.date_input('End date', value=None, min_value=earliest, max_value=latest, key='end')
         cohorts = st.multiselect('Launch months', MONTHS, key='cohorts',
                                 help='Each month is an independent launch test. For JAN, entry is the first trading day after the January roll date on or after your start limit.')
-        st.caption(f'Data available {earliest:%d %b %Y} – {latest:%d %b %Y}. Launch dates follow the supplied roll calendar.')
-    with st.expander('Execution & eligibility', expanded=False):
+        st.write('Each launch month is a separate backtest. A January launch enters on the first observed trading session after the qualifying January roll date, on or after your start limit. Performance starts at 100 on that entry date.')
+        st.write(f'At entry, buy the top {n} eligible fund(s) under your selection rule, equally weighted for a portfolio. With next-close trading, the ranking comes from the preceding session. A January launch does not require holding FJAN.')
+        st.info('The review calendar stays fixed: quarterly reviews are in March, June, September and December—even when the backtest launches in January. At those reviews, only triggered holdings are reconsidered; optional weight bands are checked separately.')
+        st.caption(f'Data available {earliest:%d %b %Y} – {latest:%d %b %Y}. Multiple launch months create independent comparisons, not one combined portfolio.')
+    with st.expander('Trading assumptions & fund eligibility', expanded=False):
+        st.write('By default, calculate the ranking and trigger at a trading close, then execute any resulting trade at the following trading session’s close. This avoids assuming the final closing signal could already have been traded at that same price.')
         a, b = st.columns(2)
-        lag = a.selectbox('Trade execution', [1, 0], format_func=lambda v: 'Next trading close' if v else 'Same close (theoretical)', key='lag')
-        cost = b.number_input('Cost per replacement (bps)', min_value=0.0, max_value=9999.0, step=1.0, key='cost')
-        hold = a.number_input('Minimum holding sessions', min_value=0, max_value=2520, step=1, key='holding_days')
+        lag = a.selectbox('When to execute a signaled trade', [1, 0], format_func=lambda v: 'Following trading day’s close (default)' if v else 'Signal day’s close (theoretical comparison)', key='lag')
+        cost = b.number_input('Trading cost (basis points)', min_value=0.0, max_value=9999.0, step=1.0, key='cost', help='0 means no transaction cost. 5 bps = 0.05%, or $5 per $10,000 of one-way traded capital. Charged on replacements and weight adjustments; initial entry is uncharged.')
+        hold = a.number_input('Minimum trading days before replacement', min_value=0, max_value=2520, step=1, key='holding_days', help='0 adds no holding restriction. A positive number prevents replacement until that many observed trading sessions after purchase; it does not delay weight-only adjustments.')
         remaining = b.number_input('Minimum outcome days remaining', min_value=0, max_value=366, step=1, key='remaining_days')
         audit = st.checkbox('Include full candidate rankings in Excel', key='audit')
-        st.caption('Costs apply once to replaced capital. Initial entry is uncharged. The universe is the 12 F-series funds in the repository.')
+        st.caption('Costs and minimum holding days are implemented in the engine. Both default to zero in the client presets. Named holding-period experiments deliberately specify a nonzero delay.')
     with st.expander('Turnover & weight controls', expanded=False):
         st.caption('Optional controls slow replacements. Defaults preserve the original strategy. Budgets and confirmation can delay exits from deteriorating holdings.')
         a, b = st.columns(2)
@@ -245,29 +323,46 @@ with main:
         band = st.number_input('Weight band around 1/N (percentage points)', min_value=0., max_value=100., step=1., key='band_pp', disabled=n==1 or not use_bands)
         if n>1 and use_bands:
             st.caption(f'Target {1/n:.1%}; review band {max(0,1/n-band/100):.1%}–{min(1,1/n+band/100):.1%}. A breach requests a full equal-weight reset at the configured execution time, subject to remaining turnover budget.')
-        st.caption('Minimum holding sessions are set under Execution & eligibility. Replacement controls do not suppress the separate weight-band policy. A band is a review trigger, not a continuously enforced weight cap.')
+        st.caption('Minimum holding days are set under Trading assumptions & fund eligibility. Replacement controls do not suppress the separate weight-band policy. A band is a review trigger, not a continuously enforced weight cap.')
         if budget/100 < 1/n:
             st.warning('This budget is below an initially equal-sized holding. Whole-holding replacements can be deferred until their weight fits the budget.')
-    with st.expander('ECR formula parameters', expanded=False):
-        st.caption('The presets use the workbook multiplicative formula. Changing these values creates a custom experiment; it can change the score scale.')
+    with st.expander('ECR formula · components & outcome period', expanded=False):
+        st.subheader('Components of the ECR score')
+        st.caption('Economics drive the score; buffer and cap integrity act as multiplicative gates. Period position adds a small timing bonus. The default coefficients have an intended maximum of 3.0.')
+        annual_tab, quarterly_tab = st.tabs(['Annual outcome products','Quarterly outcome products'])
+        with annual_tab:
+            st.write('Annual settings: period-position peak at 180 days, width 75 days. Reset tolerance is 0.07 on the downside and 0.05 on the upside.')
+        with quarterly_tab:
+            st.write('Quarterly proposal: peak at 45 days, width 18.75 days. Keep reset tolerance at 0.07 / 0.05. This preserves the relative timing curve under a 360/90-day convention; it is not yet calibrated to quarterly fund history.')
+            st.caption('Quarterly products and quarterly review cadence are different. Changing review cadence does not change fund outcome length. Quarterly groups stay unavailable until their own history is supplied.')
+        st.info(f'Active outcome profile: {outcome}. Selecting an outcome period above sets its timing defaults. The editable values below are the actual parameters used.')
         st.code('(w_DBB × DBB + w_Reset × Reset) × max(0, Buffer)^γB × max(0, Cap)^γC + bonus × Period', language=None)
-        labels = {'dbb_weight':'DBB coefficient', 'reset_weight':'Reset coefficient', 'buffer_exponent':'Buffer gate exponent',
-                  'cap_exponent':'Cap gate exponent', 'period_bonus':'Period bonus', 'dbb_decay':'DBB decay',
-                  'sigma_down':'Reset sigma · downside', 'sigma_up':'Reset sigma · upside',
-                  'period_center':'Period center (days)', 'period_width':'Period width (days)'}
-        a, b = st.columns(2)
+        groups = [
+            ('1. Downside Before Buffer', 'Measures unprotected loss exposure before the buffer starts absorbing losses.', [('dbb_weight','DBB coefficient'),('dbb_decay','DBB sensitivity')]),
+            ('2. Par / Reset Proximity', 'Rewards a reference asset near its reset level. Larger sigma gives more tolerance to drift.', [('reset_weight','Reset coefficient'),('sigma_down','Downside reset tolerance'),('sigma_up','Upside reset tolerance')]),
+            ('3. Buffer Integrity', 'Measures how much of the original net buffer remains. A larger exponent applies a stronger penalty below 1.', [('buffer_exponent','Buffer gate exponent')]),
+            ('4. Cap Integrity', 'Measures the remaining net cap relative to the original cap. It gates the economic portion of ECR.', [('cap_exponent','Cap gate exponent')]),
+            ('5. Outcome-Period Position', 'Rewards the middle of the outcome period using days remaining. Its bonus is additive.', [('period_bonus','Period-position bonus'),('period_center','Peak days remaining'),('period_width','Timing width (days)')]),
+        ]
         score_options = {}
-        for index, (key, label) in enumerate(labels.items()):
-            score_options[key] = (a if index % 2 == 0 else b).number_input(
-                label, min_value=.001 if key in ('sigma_down','sigma_up','period_width') else 0.0,
-                step=.01 if 'sigma' in key else .1, format='%.3f', key='score_'+key)
+        for title, description, fields in groups:
+            with st.container(border=True):
+                st.subheader(title)
+                st.caption(description)
+                columns = st.columns(len(fields))
+                for column,(key,label) in zip(columns,fields):
+                    score_options[key] = column.number_input(label, min_value=.001 if key in ('sigma_down','sigma_up','period_width') else 0.,
+                                                             step=.01 if 'sigma' in key else .1, format='%.3f', key='score_'+key)
 
 error = None
 try:
     if start is None or end is None:
         raise ValueError('Choose both a start and an end date.')
+    selected_catalogue = validate_universe(catalogue, selected_tickers, catalogue.loc[catalogue.history_available].ticker)
+    if n > len(selected_tickers):
+        raise ValueError('Number of portfolio funds exceeds the selected universe.')
     score = ScoreConfig(**score_options)
-    config = BacktestConfig(client_name=st.session_state.client, portfolio_size=int(n), selection=selection,
+    config = BacktestConfig(client_name=st.session_state.client, portfolio_size=int(n), selection=selection, universe=tuple(selected_tickers),
                             review=cadence, initial_selection='highest_score', trigger='ecr' if metric == 'ecr' else 'metric_floor',
                             buffer_metric='buffer_integrity' if metric == 'ecr' else metric,
                             threshold=threshold if metric == 'ecr' else 1.5,
@@ -286,7 +381,7 @@ with summary, st.container(border=True):
     st.markdown('<div class="step">YOUR STRATEGY</div>', unsafe_allow_html=True)
     st.subheader('Ready to test')
     for label, value in [('Portfolio', f'{n} fund'+('s' if n != 1 else '')+' · '+structure),
-                         ('Review', CADENCES[cadence]), ('Selection', SELECTIONS[selection]),
+                         ('Universe', f'{len(selected_tickers)} funds · {outcome}'), ('Review', CADENCES[cadence]), ('Selection', SELECTIONS[selection]),
                          ('Trigger', f'{METRICS[metric]} < {threshold:g}'),
                          ('Execution', 'Next trading close' if lag else 'Same close · theoretical'),
                          ('Turnover budget', f'{budget:g}% per review'),
@@ -297,24 +392,40 @@ with summary, st.container(border=True):
     st.caption('Excel workbook + interactive charts + PNG reports. Every run includes its exact settings.')
     if error:
         st.error(error)
-    if n == 12:
-        st.info('All 12 funds are held. There are no outside replacements; a breach may leave the portfolio unchanged.')
+    with st.expander('Archive location', expanded=False):
+        st.checkbox('Save each completed run automatically', key='archive_enabled')
+        st.text_input('Results folder on this computer', key='archive_root')
+        st.caption('Each run gets its own dated subfolder with Excel, PNG and HTML charts, settings, and a ZIP. This path belongs to the computer running the app.')
+    st.caption('Automatic archive: ' + st.session_state.archive_root if st.session_state.archive_enabled else 'Automatic archiving is off. ZIP downloads remain available.')
+    if n == len(selected_tickers) and n>1:
+        st.info('All selected funds are held. There are no outside replacements; a breach may leave the portfolio unchanged.')
     if st.button('Run backtest →', type='primary', width='stretch', disabled=bool(error)):
         try:
             with st.status('Running your strategy…', expanded=True) as status:
                 began = time.perf_counter()
                 st.write('Preparing the selected scoring model')
-                data, sources = prepared_dataset(source_signature(), score)
+                data, sources = prepared_dataset(source_signature(), score, config.universe)
                 validate_window(data, config)
                 st.write('Simulating holdings, triggers and trading costs')
                 result = simulate(data, config)
                 result['sources'] = sources
+                result['universe'] = selected_catalogue
+                result['requested_archive_root'] = st.session_state.archive_root if st.session_state.archive_enabled else None
                 result['timings'] = {'run_seconds': time.perf_counter() - began}
                 st.write('Building Excel and chart downloads')
                 downloads = build_downloads(result)
+                archive_path, archive_error = None, None
+                if st.session_state.archive_enabled:
+                    st.write('Saving the completed report to the archive')
+                    try:
+                        archive_path = str(save_archive(downloads, st.session_state.archive_root, config.client_name, result['strategy_id']))
+                    except OSError as exc:
+                        archive_error = str(exc)
                 status.update(label='Backtest complete', state='complete')
             st.session_state.result = result
             st.session_state.downloads = downloads
+            st.session_state.archive_path = archive_path
+            st.session_state.archive_error = archive_error
             st.session_state.pop('result_cohort', None)
             st.session_state['_navigate'] = 'Results'
             st.rerun()

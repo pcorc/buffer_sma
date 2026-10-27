@@ -18,7 +18,7 @@ def main():
     parser.add_argument('--cohorts',default=','.join(MONTHS))
     parser.add_argument('--start-date',default='2021-01-19')
     parser.add_argument('--end-date')
-    parser.add_argument('--cost-bps',type=float,default=5.)
+    parser.add_argument('--cost-bps',type=float,default=0.)
     parser.add_argument('--filter',default='',help='Case-insensitive substring, e.g. combined or N=3')
     parser.add_argument('--output',type=Path)
     args=parser.parse_args()

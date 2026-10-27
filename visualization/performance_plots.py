@@ -36,7 +36,7 @@ def plot_results(result, output):
 def plot_studio_results(result, output):
     """Portable PNGs of performance, risk, triggers and actual holdings per launch."""
     config = result['parameters']['backtest']
-    colors = ['#147D73', '#9AA7B4', '#5789B1', '#C99D5B', '#8578AD', '#CE8475']
+    colors = ['#1B3442', '#9AA7B4', '#5789B1', '#EAAA43', '#8578AD', '#CE8475']
     for cohort in result['summary'].Cohort:
         curve = result['daily'].loc[result['daily'].Cohort == cohort]
         positions = result['holdings'].loc[result['holdings'].Cohort == cohort]

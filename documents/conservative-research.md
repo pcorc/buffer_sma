@@ -8,7 +8,8 @@ there is no additive 33/33/33 model. N denotes funds, not underlying stocks.
 
 Outcome duration and review cadence are separate decisions. Quarterly reviews
 of a 12-month fund do not create a quarterly-outcome strategy. The supplied
-observations and engine universe remain the twelve annual F-series funds.
+loaded observations remain the twelve annual F-series funds. Explicit custom
+universes and a metadata catalogue now support adding other datasets later.
 Real quarterly evaluation requires quarterly NAVs, returns since their own reset,
 original/remaining cap and buffer, outcome days and the corresponding roll and
 launch calendar, plus an adapter for that universe. Changing these parameters
@@ -74,7 +75,8 @@ that realized losses must be lower. DBB floors use the DBB **score**, not a raw
 percentage loss. With DBB = exp(5 × input), scores 0.95/0.90/0.80 correspond to
 inputs of approximately -1.03%/-2.11%/-4.46%. A higher floor responds earlier.
 
-Run the entire suite with the same next-close execution and 5 bps fees:
+Run the entire suite with the same next-close execution and zero trading costs
+(the current default). Add `--cost-bps 5` for the earlier fee assumption:
 
 ```bash
 python scripts/run_conservative_suite.py

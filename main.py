@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import time
 
-from backtesting.data_pipeline import file_hash, load_benchmarks, load_cycles, load_metrics
+from backtesting.data_pipeline import file_hash, load_benchmarks, load_cycles, metric_paths, load_metric_collection
 from backtesting.engine import prepare_data, simulate
 from config.settings import BacktestConfig, ScoreConfig
 from utils.exporters import export_results
@@ -25,6 +25,7 @@ def parser():
     p.add_argument('--output', type=Path, help='New output directory (must not exist)')
     p.add_argument('--threshold', type=float)
     p.add_argument('--client-name')
+    p.add_argument('--universe', help='Comma-separated explicit eligible tickers, e.g. FJAN,FFEB,FMAR')
     p.add_argument('--portfolio-size', type=int, help='Number of distinct funds, fixed for this backtest')
     p.add_argument('--selection', choices=['highest_ecr', 'highest_dbb', 'highest_buffer_integrity', 'highest_cap_integrity'])
     p.add_argument('--comparator', choices=['<', '<='])
@@ -67,6 +68,8 @@ def main(argv=None):
         value = getattr(args, field.name, None)
         if value is not None:
             backtest_options[field.name] = value
+    if args.universe:
+        backtest_options['universe'] = tuple(t.strip().upper() for t in args.universe.split(','))
     if args.cohorts:
         backtest_options['cohorts'] = tuple(c.strip().upper() for c in args.cohorts.split(','))
     elif 'cohorts' in backtest_options:
@@ -75,8 +78,9 @@ def main(argv=None):
         backtest_options['candidate_audit'] = False
     score_config, config = ScoreConfig(**score_options), BacktestConfig(**backtest_options)
     started = time.perf_counter()
-    data = prepare_data(load_metrics(args.metrics), load_benchmarks(args.benchmarks),
-                        load_cycles(args.cycles), score_config)
+    paths = metric_paths(args.metrics, ROOT/'input_data/fund_metrics' if args.metrics.resolve() == (ROOT/'input_data/website_metrics.csv').resolve() else None)
+    data = prepare_data(load_metric_collection(paths), load_benchmarks(args.benchmarks),
+                        load_cycles(args.cycles), score_config, universe=config.universe)
     prepared = time.perf_counter()
     result = simulate(data, config)
     simulated = time.perf_counter()
@@ -92,6 +96,7 @@ def main(argv=None):
                 'sources': {name: {'path': str(getattr(args, name).resolve()),
                                    'sha256': file_hash(getattr(args, name))}
                             for name in ('metrics', 'benchmarks', 'cycles')},
+                'supplemental_metrics': [{'path': str(p.resolve()), 'sha256': file_hash(p)} for p in paths[1:]],
                 'load_score_seconds': prepared - started, 'simulation_seconds': simulated - prepared,
                 'execution': ('signal at close; theoretical execution at same close' if config.execution_lag == 0
                               else 'signal at close; execution at next observed trading close'),

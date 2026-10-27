@@ -69,3 +69,17 @@ def load_cycles(path):
     if cycles.duplicated().any():
         raise ValueError('Duplicate monthly cycle dates')
     return pd.DatetimeIndex(cycles.sort_values())
+
+
+def metric_paths(primary, supplemental_directory=None):
+    paths = [Path(primary)]
+    if supplemental_directory is not None:
+        paths.extend(sorted(Path(supplemental_directory).glob('*.csv')))
+    return paths
+
+
+def load_metric_collection(paths):
+    frame = pd.concat([load_metrics(p) for p in paths], ignore_index=True)
+    if frame.duplicated(['ticker', 'date']).any():
+        raise ValueError('Duplicate ticker/date observations across metric files')
+    return frame.sort_values(['date', 'ticker']).reset_index(drop=True)

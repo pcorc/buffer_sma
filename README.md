@@ -275,3 +275,29 @@ See [conservative research](documents/conservative-research.md) for every preset
 exact accounting, CLI examples, quarterly-outcome scoring proposals and tradeoffs.
 The supplied dataset still represents annual F-series outcome structures; a
 quarterly review cadence does not change their outcome horizon.
+
+## Universe filters, trading defaults and automatic archives
+
+The Studio now uses a navy/gold/cream visual style and a catalogue-driven universe
+section. F-series is the loaded default. D/G-series, UCITS and quarterly groups
+remain unavailable until real historical data and catalogue records are supplied.
+You can filter series, strategy, reference asset, outcome month and one broad
+buffer category, then edit the exact ticker list. Only that list can be bought.
+Annual and quarterly groups remain separate; quarterly timing proposes 45/18.75
+days while keeping reset sigmas 0.07/0.05. These are editable research defaults.
+
+The saved client presets now default to **zero trading costs**, **zero minimum
+holding days**, and **next-close execution**. Named research variants explicitly
+studying a holding delay retain that delay. The conservative suite defaults to
+zero costs too; pass `--cost-bps 5` to reproduce the prior cost assumption.
+
+By default, each successful app run automatically creates a unique dated folder
+under `G:\Shared drives\Portfolio Management\Funds\Archive\Model Portfolio Allocation\ECR Backtest Results`.
+It contains Excel, CSVs, PNG/HTML graphs, the replayable configuration, source
+manifest and `results.zip`. The app displays the saved location. Archive failures
+are shown honestly, and downloads remain available. The location belongs to the
+machine running Streamlit; the cloud workspace cannot access your Windows G drive.
+Change or disable the archive under **Archive location** in the strategy summary.
+
+See [universes and archives](documents/universes-and-archives.md) for the future
+fund-data schema and exact launch, scoring and archive behavior.

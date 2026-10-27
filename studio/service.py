@@ -8,7 +8,8 @@ import subprocess
 from tempfile import TemporaryDirectory
 from zipfile import ZipFile, ZIP_DEFLATED
 
-from backtesting.data_pipeline import file_hash, load_metrics, load_benchmarks, load_cycles
+from backtesting.data_pipeline import file_hash, load_benchmarks, load_cycles, metric_paths, load_metric_collection
+from core.universe import CATALOG_PATH, EXTRA_METRICS, load_catalog
 from backtesting.engine import prepare_data
 from config.settings import BacktestConfig, ScoreConfig
 from utils.exporters import export_results
@@ -29,14 +30,25 @@ SCHEDULE_NOTES = {
 
 
 def source_signature():
-    return tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in SOURCE_PATHS.values())
+    paths = [*SOURCE_PATHS.values(), CATALOG_PATH, *sorted(EXTRA_METRICS.glob('*.csv'))]
+    return tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in paths)
 
 
-def load_dataset(score):
+def load_dataset(score, universe=None):
+    paths = metric_paths(SOURCE_PATHS['metrics'], EXTRA_METRICS)
     sources = {name: {'path': str(p), 'sha256': file_hash(p)} for name, p in SOURCE_PATHS.items()}
-    data = prepare_data(load_metrics(SOURCE_PATHS['metrics']), load_benchmarks(SOURCE_PATHS['benchmarks']),
-                        load_cycles(SOURCE_PATHS['cycles']), score)
+    sources['catalogue'] = {'path': str(CATALOG_PATH), 'sha256': file_hash(CATALOG_PATH)}
+    sources['supplemental_metrics'] = [{'path': str(p), 'sha256': file_hash(p)} for p in paths[1:]]
+    data = prepare_data(load_metric_collection(paths), load_benchmarks(SOURCE_PATHS['benchmarks']),
+                        load_cycles(SOURCE_PATHS['cycles']), score, universe=universe)
     return data, sources
+
+
+def available_catalogue():
+    metrics = load_metric_collection(metric_paths(SOURCE_PATHS['metrics'], EXTRA_METRICS))
+    catalogue = load_catalog()
+    catalogue['history_available'] = catalogue.ticker.isin(metrics.ticker.unique())
+    return catalogue
 
 
 def config_json(score, config):
@@ -86,7 +98,8 @@ def build_downloads(result):
                 'git_dirty': dirty, 'sources': result.get('sources', {}),
                 'execution': 'Next observed close' if config.execution_lag else 'Theoretical same close',
                 'review_calendar': SCHEDULE_NOTES.get(config.review, 'Every observed session'),
-                'timings': result.get('timings', {})}
+                'timings': result.get('timings', {}),
+                'requested_archive_root': result.get('requested_archive_root')}
     with TemporaryDirectory(prefix='ecr-studio-') as temp:
         output = Path(temp) / 'report'
         export_results(result, output, manifest)
@@ -106,7 +119,8 @@ def build_downloads(result):
             'config.json: replay with python main.py --config /path/to/config.json\n\n'
             'Review cadence checks the trigger; trades are conditional. Only breached sleeves are replaced.\n'
             'Ties prefer incumbents. A breached incumbent may stay if it still ranks highest.\n'
-            'A single-fund Hold NAV is the launch-month fund; a FoF Hold NAV is the initial basket.\n'
+            'With an explicit universe, Hold NAV is the initially selected fund/basket held without trading.\n'
+            'Legacy configurations without a universe retain the single-fund launch-month benchmark.\n'
             'Initial purchases are not charged a switch cost. Later costs apply to replaced capital only.\n')
         archive = BytesIO()
         with ZipFile(archive, 'w', ZIP_DEFLATED) as zipped:
