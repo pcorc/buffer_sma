@@ -95,36 +95,18 @@ def export_comparison(results, output):
     return path
 
 
-def initial_experiments(score=ScoreConfig(), backtest=BacktestConfig()):
-    """Controlled variations of the same multiplicative ECR formula."""
-    from dataclasses import replace
-    common = replace(backtest, candidate_audit=False, trigger='ecr')
-    top = replace(common, initial_selection='highest_score')
-    return [
-        Experiment('Workbook / cohort entry', score, replace(common, initial_selection='cohort')),
-        Experiment('Workbook / highest entry', score, top),
-        Experiment('DBB emphasis (1.8 / 0.9)', replace(score, dbb_weight=1.8, reset_weight=.9), top),
-        Experiment('Stricter buffer gate (1.0)', replace(score, buffer_exponent=1.), top),
-        Experiment('Stricter cap gate (0.8)', replace(score, cap_exponent=.8), top),
-        Experiment('Buffer decline only', score, replace(top, trigger='buffer_drop')),
-        Experiment('ECR OR buffer decline', score, replace(top, trigger='ecr_or_buffer')),
-        Experiment('ECR AND buffer decline', score, replace(top, trigger='ecr_and_buffer')),
-    ]
-
-
 def conservative_experiments(score=ScoreConfig(), backtest=BacktestConfig()):
-    """Separate ECR parameter allocation from fresh-component exit thresholds."""
+    """Fixed multiplicative ECR selection; vary only the buffer-integrity exit floor."""
     from dataclasses import replace
-    common = replace(backtest, initial_selection='highest_score', candidate_audit=False)
-    allocations = [('Equal', (1,1,1)), ('DBB 75%', (.75,.125,.125)),
-                   ('Buffer 75%', (.125,.75,.125)), ('Cap 75%', (.125,.125,.75))]
-    tests = [Experiment(f'Weights / {name}', replace(score, component_weights=w),
-                        replace(common, trigger='ecr')) for name,w in allocations]
-    # Method 2 deliberately uses the unweighted baseline ECR for replacement selection.
-    baseline = replace(score, component_weights=(1/3,1/3,1/3))
-    for metric in ('dbb','buffer_integrity','cap_integrity'):
-        for floor in (.7,.8,.9):
-            tests.append(Experiment(f'{metric} below {floor:.0%} fresh', baseline,
-                         replace(common, trigger='metric_floor', buffer_metric=metric,
-                                 metric_floor=floor, comparator='<')))
+    common = replace(backtest, initial_selection='highest_score', candidate_audit=False,
+                     buffer_metric='buffer_integrity', comparator='<')
+    tests = [Experiment('ECR threshold baseline', score, replace(common, trigger='ecr'))]
+    for floor in (.7, .8, .9):
+        tests.append(Experiment(f'Buffer integrity below {floor:.0%} fresh', score,
+                     replace(common, trigger='metric_floor', metric_floor=floor)))
     return tests
+
+
+def initial_experiments(score=ScoreConfig(), backtest=BacktestConfig()):
+    """The notebook's initial comparison uses the confirmed conservative experiment."""
+    return conservative_experiments(score, backtest)

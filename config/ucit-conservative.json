@@ -1,12 +1,14 @@
 {
-  "score": {"component_weights": [0.75, 0.125, 0.125]},
+  "score": {},
   "backtest": {
     "initial_selection": "highest_score",
     "review": "monthly",
-    "trigger": "ecr",
+    "trigger": "metric_floor",
     "threshold": 1.5,
     "comparator": "<",
     "execution_lag": 1,
-    "cost_bps": 5
+    "cost_bps": 5,
+    "buffer_metric": "buffer_integrity",
+    "metric_floor": 0.8
   }
 }

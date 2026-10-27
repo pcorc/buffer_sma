@@ -8,7 +8,6 @@ MONTHS = ('JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
 
 @dataclass(frozen=True)
 class ScoreConfig:
-    component_weights: tuple[float, float, float] = (1/3, 1/3, 1/3)
     dbb_weight: float = 1.5
     reset_weight: float = 1.2
     buffer_exponent: float = 0.5
@@ -21,21 +20,13 @@ class ScoreConfig:
     period_width: float = 75.0
 
     def __post_init__(self):
-        weights = tuple(self.component_weights)
-        if len(weights) != 3 or any(not math.isfinite(w) or w < 0 for w in weights) or sum(weights) <= 0:
-            raise ValueError('component_weights require three nonnegative finite weights with positive sum')
-        total = sum(weights)
-        object.__setattr__(self, 'component_weights', tuple(w / total for w in weights))
         for name, value in asdict(self).items():
-            if name == 'component_weights':
-                continue
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f'{name} must be finite and nonnegative')
         for name in ('sigma_down', 'sigma_up', 'period_width'):
             if getattr(self, name) <= 0:
                 raise ValueError(f'{name} must be positive')
-        if self.dbb_weight * 3 * self.component_weights[0] + self.reset_weight <= 0:
-            raise ValueError('At least one effective DBB/reset coefficient must be positive')
+
 
 
 @dataclass(frozen=True)

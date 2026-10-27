@@ -45,28 +45,22 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(session.score_builds, 1)
         self.assertNotEqual(a['strategy_id'], b['strategy_id'])
         np.testing.assert_allclose(session.prepare().scores, prepare_data(session.metrics,session.benchmarks,session.cycles).scores)
-        self.assertEqual(len(initial_experiments()), 8)
+        self.assertEqual(len(initial_experiments()), 4)
 
 class ConservativeTests(unittest.TestCase):
-    def test_equal_allocation_preserves_workbook_and_normalizes_percentages(self):
-        from core.scoring import score_funds
-        data=example_data()[0]
-        a=score_funds(data)
-        b=score_funds(data,ScoreConfig(component_weights=(33,33,33)))
-        np.testing.assert_allclose(a.ecr,b.ecr,atol=1e-14)
-        for w in [(0,0,0),(-1,1,1),(1,2)]:
-            with self.assertRaises(ValueError):ScoreConfig(component_weights=w)
+    def test_legacy_allocation_config_is_rejected(self):
+        with self.assertRaises(TypeError):
+            ScoreConfig(component_weights=(.75,.125,.125))
 
-    def test_allocation_scale_and_effect(self):
-        from core.scoring import score_funds
-        data=example_data()[0].iloc[:1].copy()
-        data['remaining_cap_net']=.1
-        for weights in [(1,1,1),(.75,.125,.125),(.125,.75,.125)]:
-            self.assertAlmostEqual(score_funds(data,ScoreConfig(component_weights=weights)).ecr.iloc[0],3.)
-        data['remaining_buffer_net']=.05
-        a=score_funds(data).ecr.iloc[0]
-        b=score_funds(data,ScoreConfig(component_weights=(.125,.75,.125))).ecr.iloc[0]
-        self.assertLess(b,a)
+    def test_conservative_grid_varies_only_buffer_trigger(self):
+        experiments = initial_experiments()
+        self.assertTrue(all(e.score == ScoreConfig() for e in experiments))
+        self.assertEqual(experiments[0].backtest.trigger, 'ecr')
+        self.assertEqual([e.backtest.metric_floor for e in experiments[1:]], [.7,.8,.9])
+        for e in experiments[1:]:
+            self.assertEqual(e.backtest.trigger, 'metric_floor')
+            self.assertEqual(e.backtest.buffer_metric, 'buffer_integrity')
+            self.assertEqual(e.backtest.comparator, '<')
 
     def test_metric_floor_is_independent_of_entry_and_ecr(self):
         config=BacktestConfig(trigger='metric_floor',metric_floor=.8,comparator='<')

@@ -1,4 +1,6 @@
-# First ECR research comparison
+# Historical ECR research comparison
+
+This records the earlier exploratory experiments. The active conservative notebook now keeps ECR selection fixed and varies only buffer-integrity floors; see `ucit-conservative.md`.
 
 These are exploratory historical comparisons using the supplied Website Metrics
 observations through 2026-03-27. All twelve cohort windows, monthly reviews,

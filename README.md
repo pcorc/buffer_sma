@@ -182,7 +182,7 @@ Decision records include both component signals, the entry anchor and the measur
 decline, even when the holding period prevents trading. The daily buffer chart
 shows the holding at close; inspect the decision table for the outgoing fund.
 
-The notebook compares eight experiments with identical cohort windows and then
+The notebook compares four trigger experiments with identical cohort windows and then
 repeats them with next-close execution and 5 bp per-switch costs. These overlapping
 cohorts are not independent samples, and this comparison is not an out-of-sample
 optimization. The notebook includes a visualization roadmap for holdings timelines,
@@ -190,10 +190,11 @@ rank heatmaps, gated component contributions and parameter-sensitivity surfaces.
 
 ## Conservative client research
 
-Use [the conservative methods guide](documents/ucit-conservative.md) and the
-UCIT comparison section in `notebooks/ecr_backtest.ipynb`. Relative component
-emphasis is configured with `--component-weights 0.75,0.125,0.125`. A separate
-`--trigger metric_floor --buffer-metric dbb --metric-floor 0.8` tests a component
-against ideal fresh score 1 while continuing to select by ECR. Buffer and cap
-integrity are also supported. The guide defines the multiplicative allocation
-mapping, score normalization, and distinction from purchase-relative decline.
+Use [the conservative methods guide](documents/ucit-conservative.md) and
+`notebooks/ecr_backtest.ipynb`. Standard multiplicative ECR selects the fund;
+`--trigger metric_floor --buffer-metric buffer_integrity --metric-floor 0.8`
+checks whether buffer integrity falls below 80% of ideal fresh score 1.00.
+The preset `config/ucit-conservative.json` uses this trigger. The notebook compares
+70%, 80% and 90% floors against the regular ECR-threshold baseline with identical
+selection scoring and other assumptions. Three-component allocation controls
+have been removed; this is not a weight-sweep experiment.

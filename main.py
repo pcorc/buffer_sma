@@ -38,11 +38,7 @@ def parser():
     p.add_argument('--buffer-metric', choices=['buffer_integrity', 'dbb', 'cap_integrity'])
     p.add_argument('--metric-floor', type=float, help='Fraction of ideal fresh component score 1, e.g. 0.8')
     p.add_argument('--buffer-drop', type=float)
-    p.add_argument('--component-weights', type=lambda value: tuple(float(w) for w in value.split(',')),
-                   help='Relative DBB,buffer,cap allocation, e.g. 0.75,0.125,0.125')
     for field in fields(ScoreConfig):
-        if field.name == 'component_weights':
-            continue
         p.add_argument('--' + field.name.replace('_', '-'), type=float)
     p.add_argument('--no-audit', action='store_true', help='Omit all-candidate table; keep diagnostics/decisions')
     p.add_argument('--no-excel', action='store_true')
