@@ -1,4 +1,4 @@
-# First ECR 2.0 research comparison
+# First ECR research comparison
 
 These are exploratory historical comparisons using the supplied Website Metrics
 observations through 2026-03-27. All twelve cohort windows, monthly reviews,
@@ -31,7 +31,7 @@ and -0.75 percentage points. This changes timing and costs together; it does not
 isolate a cost effect. The twelve overlapping cohorts are not independent trials.
 These are not annual alpha estimates or untouched out-of-sample results.
 
-Reproduce both tables by running `notebooks/ecr2_backtest.ipynb` top to bottom.
+Reproduce both tables by running `notebooks/ecr_backtest.ipynb` top to bottom.
 The session builds only four distinct scored panels for the sixteen runs and
 reuses them across triggers and execution settings. Inputs are loaded once;
 recreate the session after changing source files. No parallel workers are needed

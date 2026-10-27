@@ -1,4 +1,4 @@
-"""Run the workbook ECR 2.0 model. Use --help for reproducible controls."""
+"""Run the workbook ECR model. Use --help for reproducible controls."""
 import argparse
 from dataclasses import asdict, fields
 from datetime import datetime, timezone
@@ -34,10 +34,15 @@ def parser():
     p.add_argument('--end-date')
     p.add_argument('--cohorts', help='Comma-separated launch months, e.g. JAN,FEB')
     p.add_argument('--initial-selection', choices=['cohort', 'highest_score'])
-    p.add_argument('--trigger', choices=['ecr', 'buffer_drop', 'ecr_or_buffer', 'ecr_and_buffer'])
-    p.add_argument('--buffer-metric', choices=['buffer_integrity', 'dbb'])
+    p.add_argument('--trigger', choices=['ecr', 'buffer_drop', 'ecr_or_buffer', 'ecr_and_buffer', 'metric_floor'])
+    p.add_argument('--buffer-metric', choices=['buffer_integrity', 'dbb', 'cap_integrity'])
+    p.add_argument('--metric-floor', type=float, help='Fraction of ideal fresh component score 1, e.g. 0.8')
     p.add_argument('--buffer-drop', type=float)
+    p.add_argument('--component-weights', type=lambda value: tuple(float(w) for w in value.split(',')),
+                   help='Relative DBB,buffer,cap allocation, e.g. 0.75,0.125,0.125')
     for field in fields(ScoreConfig):
+        if field.name == 'component_weights':
+            continue
         p.add_argument('--' + field.name.replace('_', '-'), type=float)
     p.add_argument('--no-audit', action='store_true', help='Omit all-candidate table; keep diagnostics/decisions')
     p.add_argument('--no-excel', action='store_true')
@@ -73,7 +78,7 @@ def main(argv=None):
     result = simulate(data, config)
     simulated = time.perf_counter()
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-    output = args.output or ROOT / 'output' / f'ecr2-{stamp}-{result["strategy_id"]}'
+    output = args.output or ROOT / 'output' / f'ecr-{stamp}-{result["strategy_id"]}'
     try:
         commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
         dirty = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip())

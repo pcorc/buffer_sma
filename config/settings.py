@@ -8,6 +8,7 @@ MONTHS = ('JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
 
 @dataclass(frozen=True)
 class ScoreConfig:
+    component_weights: tuple[float, float, float] = (1/3, 1/3, 1/3)
     dbb_weight: float = 1.5
     reset_weight: float = 1.2
     buffer_exponent: float = 0.5
@@ -20,12 +21,21 @@ class ScoreConfig:
     period_width: float = 75.0
 
     def __post_init__(self):
+        weights = tuple(self.component_weights)
+        if len(weights) != 3 or any(not math.isfinite(w) or w < 0 for w in weights) or sum(weights) <= 0:
+            raise ValueError('component_weights require three nonnegative finite weights with positive sum')
+        total = sum(weights)
+        object.__setattr__(self, 'component_weights', tuple(w / total for w in weights))
         for name, value in asdict(self).items():
+            if name == 'component_weights':
+                continue
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f'{name} must be finite and nonnegative')
         for name in ('sigma_down', 'sigma_up', 'period_width'):
             if getattr(self, name) <= 0:
                 raise ValueError(f'{name} must be positive')
+        if self.dbb_weight * 3 * self.component_weights[0] + self.reset_weight <= 0:
+            raise ValueError('At least one effective DBB/reset coefficient must be positive')
 
 
 @dataclass(frozen=True)
@@ -45,14 +55,17 @@ class BacktestConfig:
     trigger: str = 'ecr'
     buffer_metric: str = 'buffer_integrity'
     buffer_drop: float = 0.20
+    metric_floor: float = 0.80
 
     def __post_init__(self):
         if self.initial_selection not in ('cohort', 'highest_score'):
             raise ValueError('initial_selection must be cohort or highest_score')
-        if self.trigger not in ('ecr', 'buffer_drop', 'ecr_or_buffer', 'ecr_and_buffer'):
+        if self.trigger not in ('ecr', 'buffer_drop', 'ecr_or_buffer', 'ecr_and_buffer', 'metric_floor'):
             raise ValueError('unknown trigger')
-        if self.buffer_metric not in ('buffer_integrity', 'dbb'):
-            raise ValueError('buffer_metric must be buffer_integrity or dbb')
+        if self.buffer_metric not in ('buffer_integrity', 'dbb', 'cap_integrity'):
+            raise ValueError('buffer_metric must be buffer_integrity, dbb or cap_integrity')
+        if not math.isfinite(self.metric_floor) or not 0 <= self.metric_floor <= 1:
+            raise ValueError('metric_floor must be a fraction in [0, 1] of ideal fresh score 1')
         if not math.isfinite(self.buffer_drop) or not 0 < self.buffer_drop <= 1:
             raise ValueError('buffer_drop must be in (0, 1]')
         if not math.isfinite(self.threshold) or self.threshold < 0:

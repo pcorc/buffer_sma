@@ -33,7 +33,7 @@ def example_data():
 
 class ScoreTests(unittest.TestCase):
     def test_excel_golden_components(self):
-        frame = pd.read_csv(ROOT / 'tests/fixtures/website_metrics_golden.csv')
+        frame = pd.read_csv(ROOT / 'tests/fixtures/website_metrics_golden.csv').rename(columns={'ecr2': 'ecr'})
         before = frame.copy(deep=True)
         actual = score_funds(frame)
         np.testing.assert_allclose(actual[list(COMPONENTS)], frame[list(COMPONENTS)], rtol=0, atol=1e-12)
@@ -75,11 +75,11 @@ class ScoreTests(unittest.TestCase):
         actual = score_funds(frame)
         np.testing.assert_allclose(actual.buffer_integrity, [1, 0, 1])
         np.testing.assert_allclose(actual.cap_integrity, [1, 1, -1])
-        np.testing.assert_allclose(actual.ecr2, [3, .3, .3])
+        np.testing.assert_allclose(actual.ecr, [3, .3, .3])
 
     def test_parameters_are_effective_and_validated(self):
         frame = example_data()[0]
-        self.assertFalse(score_funds(frame).ecr2.equals(score_funds(frame, ScoreConfig(period_bonus=0)).ecr2))
+        self.assertFalse(score_funds(frame).ecr.equals(score_funds(frame, ScoreConfig(period_bonus=0)).ecr))
         for kwargs in [{'sigma_up': 0}, {'period_width': -1}, {'dbb_weight': float('nan')}, {'cap_exponent': -1}]:
             with self.assertRaises(ValueError):
                 ScoreConfig(**kwargs)
@@ -184,7 +184,7 @@ class WorkbookRegressionTests(unittest.TestCase):
         cls.result = simulate(cls.data)
 
     def test_all_166_generated_events_match_excel(self):
-        expected = pd.read_csv(ROOT / 'tests/fixtures/diagnostics_golden.csv', parse_dates=['Date'])
+        expected = pd.read_csv(ROOT / 'tests/fixtures/diagnostics_golden.csv', parse_dates=['Date']).rename(columns={'ECR 2.0': 'ECR'})
         actual = self.result['diagnostics'][DIAGNOSTIC_COLUMNS].reset_index(drop=True)
         self.assertEqual(len(actual), 166)
         pd.testing.assert_frame_equal(actual, expected, check_dtype=False, atol=1e-12, rtol=0)
@@ -208,7 +208,7 @@ class WorkbookRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'run'
             export_results(self.result, output, self.result['parameters'], plots=False)
-            actual = pd.read_excel(output / 'ecr2_results.xlsx', sheet_name='ECR 2.0 Diagnostics')
+            actual = pd.read_excel(output / 'ecr_results.xlsx', sheet_name='ECR Diagnostics')
             self.assertEqual(len(actual), 166)
             self.assertTrue((output / 'manifest.json').is_file())
             with self.assertRaises(FileExistsError):

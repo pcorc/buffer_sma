@@ -96,7 +96,7 @@ def export_comparison(results, output):
 
 
 def initial_experiments(score=ScoreConfig(), backtest=BacktestConfig()):
-    """Controlled variations of the same multiplicative ECR 2.0 formula."""
+    """Controlled variations of the same multiplicative ECR formula."""
     from dataclasses import replace
     common = replace(backtest, candidate_audit=False, trigger='ecr')
     top = replace(common, initial_selection='highest_score')
@@ -110,3 +110,21 @@ def initial_experiments(score=ScoreConfig(), backtest=BacktestConfig()):
         Experiment('ECR OR buffer decline', score, replace(top, trigger='ecr_or_buffer')),
         Experiment('ECR AND buffer decline', score, replace(top, trigger='ecr_and_buffer')),
     ]
+
+
+def conservative_experiments(score=ScoreConfig(), backtest=BacktestConfig()):
+    """Separate ECR parameter allocation from fresh-component exit thresholds."""
+    from dataclasses import replace
+    common = replace(backtest, initial_selection='highest_score', candidate_audit=False)
+    allocations = [('Equal', (1,1,1)), ('DBB 75%', (.75,.125,.125)),
+                   ('Buffer 75%', (.125,.75,.125)), ('Cap 75%', (.125,.125,.75))]
+    tests = [Experiment(f'Weights / {name}', replace(score, component_weights=w),
+                        replace(common, trigger='ecr')) for name,w in allocations]
+    # Method 2 deliberately uses the unweighted baseline ECR for replacement selection.
+    baseline = replace(score, component_weights=(1/3,1/3,1/3))
+    for metric in ('dbb','buffer_integrity','cap_integrity'):
+        for floor in (.7,.8,.9):
+            tests.append(Experiment(f'{metric} below {floor:.0%} fresh', baseline,
+                         replace(common, trigger='metric_floor', buffer_metric=metric,
+                                 metric_floor=floor, comparator='<')))
+    return tests

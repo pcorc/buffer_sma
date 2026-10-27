@@ -26,7 +26,7 @@ def main():
     data = prepare_data(load_metrics(args.workbook), load_benchmarks(root / 'input_data/benchmark_ts.csv'),
                         load_cycles(root / 'input_data/roll_dates.csv'))
     result = simulate(data)
-    snapshots = pd.read_excel(args.workbook, sheet_name='ECR 2.0 Diagnostics', header=3)
+    snapshots = pd.read_excel(args.workbook, sheet_name='ECR 2.0 Diagnostics', header=3).rename(columns={'ECR 2.0': 'ECR'})
     snapshots = snapshots.loc[pd.to_numeric(snapshots['Switch #'], errors='coerce').notna(), DIAGNOSTIC_COLUMNS]
     pd.testing.assert_frame_equal(result['diagnostics'][DIAGNOSTIC_COLUMNS].reset_index(drop=True),
                                   snapshots.reset_index(drop=True), check_dtype=False, rtol=0, atol=1e-12)

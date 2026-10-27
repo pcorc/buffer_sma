@@ -1,6 +1,6 @@
-# ECR 2.0 buffer ETF backtesting
+# ECR buffer ETF backtesting
 
-ECR 2.0 is the only strategy model in this repository. It implements **Website
+ECR is the only strategy model in this repository. It implements **Website
 Metrics AR**, including the AM: AQ components, from the supplied methodology
 workbook. The legacy ECR/additive-par strategies, batch scripts, tracked bytecode,
 backup code and historical result files have been removed. Raw reference inputs
@@ -15,7 +15,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
-python main.py --config config/ecr2.json
+python main.py --config config/ecr.json
 ```
 
 Outputs go into a new timestamped directory under `output/`. A supplied
@@ -34,7 +34,7 @@ python main.py --metrics "/path/to/methodology.xlsx"
 
 `--help` lists every model lever. JSON config accepts `score` and `backtest`
 objects; command-line arguments override JSON values. Models/configurations are
-never inferred from encoded function names. ECR 2.0 is used for both the held
+never inferred from encoded function names. ECR is used for both the held
 fund's trigger and candidate selection.
 
 ## Exact scoring model
@@ -48,7 +48,7 @@ Buffer = min(1, max(0, remaining_buffer_net / buffer_net))
 Cap    = min(remaining_cap_net / fund_cap_net, 1)
 Reset  = exp(-r² / (2 * sigma²)), sigma = 0.07 if r <= 0 else 0.05
 Period = exp(-(d - 180)² / (2 * 75²))
-ECR2   = (1.5 * DBB + 1.2 * Reset)
+ECR   = (1.5 * DBB + 1.2 * Reset)
          * max(0, Buffer)^0.5 * max(0, Cap)^0.3 + 0.3 * Period
 ```
 
@@ -63,13 +63,13 @@ held-fund prices or invalid held scores on review dates fail the run.
 ## Rebalance and execution rules
 
 - Default: monthly review on the supplied holiday-adjusted option-cycle calendar,
-  held ECR 2.0 **<= 1.5**, with no additional minimum holding period.
+  held ECR **<= 1.5**, with no additional minimum holding period.
 - Available alternatives: daily review, strict `<`, arbitrary nonnegative
   threshold, minimum trading sessions held, and minimum remaining outcome days.
 - Each cohort enters its named F-series fund on the first available trading
   session after its first qualifying monthly cycle. Default earliest start is
   2021-01-19. This reproduces all twelve workbook cohort starts.
-- On review, pick the highest eligible ECR 2.0. Exact ties keep the current
+- On review, pick the highest eligible ECR. Exact ties keep the current
   holding; other ties use alphabetical ticker order. Picking the current fund
   does not create a switch or restart the holding clock.
 - Daily returns first accrue to the fund held coming into that close. The
@@ -110,7 +110,7 @@ candidate review identifies its strategy. No pivot combines distinct configurati
 
 ## Diagnostics and validation
 
-`ECR 2.0 Diagnostics` contains the worksheet's fifteen columns in their original
+`ECR Diagnostics` contains the worksheet's fifteen columns in their original
 order, then event identity/provenance. It captures **initial entries and actual
 switches**. Separate `Review Decisions` and `Candidate Audit` tables show holds,
 no-op triggers, delayed signals, ranks, eligibility, raw inputs and component
@@ -125,7 +125,7 @@ To compare all 16,978 formula rows directly against the original workbook:
 python scripts/validate_workbook.py "/path/to/ECR vs ECR + Par Proximity Methodology (5).xlsx"
 ```
 
-That optional verifier reads only Website Metrics and ECR 2.0 Diagnostics.
+That optional verifier reads only Website Metrics and ECR Diagnostics.
 The ordinary test suite needs no external workbook. It also tests threshold
 boundaries, minimum hold, calendar reviews, ties, costs, execution timing,
 missing data, no look-ahead, export round trips and configuration identity.
@@ -142,7 +142,7 @@ forward-trade attribution and expanded research charts are follow-up work.
 
 ## Jupyter research interface
 
-Open `notebooks/ecr2_backtest.ipynb` and run the cells in order. The configuration
+Open `notebooks/ecr_backtest.ipynb` and run the cells in order. The configuration
 cell uses the same tested Python classes as the CLI; no strategy logic lives in
 notebook cells. Edit parameters, rerun the backtest cell, then inspect charts and
 review decisions. Input data and scored panels are reused within a session.
@@ -150,16 +150,16 @@ review decisions. Input data and scored panels are reused within a session.
 ```bash
 python -m pip install -r requirements-notebook.txt
 python -m ipykernel install --prefix "$VIRTUAL_ENV" --name buffer_sma --display-name 'Python (buffer_sma)'
-jupyter lab notebooks/ecr2_backtest.ipynb
+jupyter lab notebooks/ecr_backtest.ipynb
 ```
 
 In the prepared cloud environment, use `/workspace/buffer_sma-env/bin/jupyter lab
-notebooks/ecr2_backtest.ipynb` from the repository. The `buffer_sma` kernel is
+notebooks/ecr_backtest.ipynb` from the repository. The `buffer_sma` kernel is
 already installed in that virtual environment. The tracked notebook contains no
 stored outputs; use its explicit export cell to save results and self-contained
 interactive HTML. Exported directories are ignored by Git.
 
-The formula remains the workbook's multiplicative ECR 2.0. There is no additive
+The formula remains the workbook's multiplicative ECR. There is no additive
 33/33/33 model. Adjust `dbb_weight`, `reset_weight`, `buffer_exponent`,
 `cap_exponent`, and `period_bonus` directly. Increasing a gate exponent applies a
 stronger penalty when integrity is below 1. Increasing DBB alone changes the score
@@ -187,3 +187,13 @@ repeats them with next-close execution and 5 bp per-switch costs. These overlapp
 cohorts are not independent samples, and this comparison is not an out-of-sample
 optimization. The notebook includes a visualization roadmap for holdings timelines,
 rank heatmaps, gated component contributions and parameter-sensitivity surfaces.
+
+## Conservative client research
+
+Use [the conservative methods guide](documents/ucit-conservative.md) and the
+UCIT comparison section in `notebooks/ecr_backtest.ipynb`. Relative component
+emphasis is configured with `--component-weights 0.75,0.125,0.125`. A separate
+`--trigger metric_floor --buffer-metric dbb --metric-floor 0.8` tests a component
+against ideal fresh score 1 while continuing to select by ECR. Buffer and cap
+integrity are also supported. The guide defines the multiplicative allocation
+mapping, score normalization, and distinction from purchase-relative decline.

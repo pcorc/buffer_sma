@@ -19,10 +19,12 @@ def dashboard(result, cohort='Jan'):
     drawdown = daily['Strategy NAV'] / daily['Strategy NAV'].cummax() - 1
     fig.add_trace(go.Scatter(x=daily.Date, y=drawdown, name='Strategy drawdown', fill='tozeroy'), row=2, col=1)
     drop = result['parameters']['backtest']['buffer_drop']
-    for name, values in [('Held buffer', daily['Held Buffer Score']),
-                         ('Deterioration floor', daily['Entry Buffer Score'] * (1-drop))]:
+    config = result['parameters']['backtest']
+    floor = (daily['Entry Buffer Score'] * 0 + config['metric_floor'] if config['trigger'] == 'metric_floor'
+             else daily['Entry Buffer Score'] * (1-drop))
+    for name, values in [(config['buffer_metric'], daily['Held Buffer Score']), ('Trigger floor', floor)]:
         fig.add_trace(go.Scatter(x=daily.Date, y=values, name=name), row=3, col=1)
-    fig.update_layout(height=900, title=f'ECR 2.0 — {cohort}', hovermode='x unified')
+    fig.update_layout(height=900, title=f'ECR — {cohort}', hovermode='x unified')
     fig.update_yaxes(tickformat='.0%', row=2, col=1)
     return fig
 

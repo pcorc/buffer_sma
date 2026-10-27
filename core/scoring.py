@@ -5,7 +5,7 @@ import pandas as pd
 from config.settings import ScoreConfig
 
 COMPONENTS = ('dbb', 'buffer_integrity', 'cap_integrity',
-              'reset_proximity', 'period_position', 'ecr2')
+              'reset_proximity', 'period_position', 'ecr')
 INPUTS = ('reference_asset_return', 'remaining_outcome_days', 'remaining_cap_net',
           'remaining_buffer_net', 'downside_before_buffer_net', 'fund_cap_net', 'buffer_net')
 
@@ -30,9 +30,13 @@ def score_funds(frame: pd.DataFrame, config: ScoreConfig = ScoreConfig()) -> pd.
         reset = np.exp(-x.reference_asset_return**2 / (2 * sigma**2))
         period = np.exp(-(x.remaining_outcome_days - config.period_center)**2
                         / (2 * config.period_width**2))
-        composite = ((config.dbb_weight * dbb + config.reset_weight * reset)
-                     * buffer.clip(lower=0)**config.buffer_exponent
-                     * cap.clip(lower=0)**config.cap_exponent
+        d, b, c = (3 * w for w in config.component_weights)
+        effective_dbb = config.dbb_weight * d
+        # Preserve the economics budget and the default 0–3 scale across allocations.
+        normalization = (config.dbb_weight + config.reset_weight) / (effective_dbb + config.reset_weight)
+        composite = (normalization * (effective_dbb * dbb + config.reset_weight * reset)
+                     * buffer.clip(lower=0)**(config.buffer_exponent * b)
+                     * cap.clip(lower=0)**(config.cap_exponent * c)
                      + config.period_bonus * period)
     for name, values in zip(COMPONENTS, (dbb, buffer, cap, reset, period, composite)):
         result.loc[valid, name] = values

@@ -1,0 +1,12 @@
+{
+  "score": {"component_weights": [0.75, 0.125, 0.125]},
+  "backtest": {
+    "initial_selection": "highest_score",
+    "review": "monthly",
+    "trigger": "ecr",
+    "threshold": 1.5,
+    "comparator": "<",
+    "execution_lag": 1,
+    "cost_bps": 5
+  }
+}

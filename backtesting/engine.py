@@ -1,4 +1,4 @@
-"""Indexed ECR 2.0 simulation; scores are computed once for all cohorts."""
+"""Indexed ECR simulation; scores are computed once for all cohorts."""
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -16,7 +16,7 @@ DIAGNOSTIC_MAP = {
     'Rem. Buffer (net)': 'remaining_buffer_net',
     'Downside Before Buffer (net)': 'downside_before_buffer_net',
     'DBB': 'dbb', 'Buffer Integ.': 'buffer_integrity', 'Cap Integ.': 'cap_integrity',
-    'Reset Prox.': 'reset_proximity', 'Period Pos.': 'period_position', 'ECR 2.0': 'ecr2',
+    'Reset Prox.': 'reset_proximity', 'Period Pos.': 'period_position', 'ECR': 'ecr',
 }
 DIAGNOSTIC_COLUMNS = ['Cohort', 'Switch #', 'Date', 'Fund', *DIAGNOSTIC_MAP]
 
@@ -35,6 +35,7 @@ class PreparedData:
     data_id: str
     buffers: np.ndarray
     dbb: np.ndarray
+    caps: np.ndarray
 
 
 def prepare_data(metrics, benchmarks, cycles, score_config=ScoreConfig()):
@@ -58,15 +59,15 @@ def prepare_data(metrics, benchmarks, cycles, score_config=ScoreConfig()):
         digest.update(pd.util.hash_pandas_object(value, index=True).values.tobytes())
     digest.update(pd.DatetimeIndex(cycles).asi8.tobytes())
     return PreparedData(scored.set_index(['date', 'ticker']), dates, tickers,
-                        matrix('fund_value'), matrix('ecr2'), matrix('remaining_outcome_days'),
+                        matrix('fund_value'), matrix('ecr'), matrix('remaining_outcome_days'),
                         benchmarks.reindex(dates)[['SPY', 'BUFR']].to_numpy(dtype=float),
                         pd.DatetimeIndex(cycles).sort_values(), score_config, digest.hexdigest(),
-                        matrix('buffer_integrity'), matrix('dbb'))
+                        matrix('buffer_integrity'), matrix('dbb'), matrix('cap_integrity'))
 
 
 def threshold_fires(score, config):
     if not np.isfinite(score):
-        raise ValueError('Held fund has no valid ECR 2.0 score on review date')
+        raise ValueError('Held fund has no valid ECR score on review date')
     return score <= config.threshold if config.comparator == '<=' else score < config.threshold
 
 
@@ -77,8 +78,11 @@ def trigger_signals(score, buffer_value, entry_buffer, config):
     # A zero entry score has no meaningful relative deterioration baseline.
     deterioration = 1 - buffer_value / entry_buffer if entry_buffer > 0 else np.nan
     buffer = bool(entry_buffer > 0 and buffer_value <= entry_buffer * (1 - config.buffer_drop))
+    if config.trigger == 'metric_floor':
+        buffer = bool(buffer_value <= config.metric_floor if config.comparator == '<='
+                      else buffer_value < config.metric_floor)
     fired = {'ecr': ecr, 'buffer_drop': buffer, 'ecr_or_buffer': ecr or buffer,
-             'ecr_and_buffer': ecr and buffer}[config.trigger]
+             'ecr_and_buffer': ecr and buffer, 'metric_floor': buffer}[config.trigger]
     return bool(fired), bool(ecr), buffer, deterioration
 
 
@@ -97,7 +101,7 @@ def _start_index(data, cohort, config):
 
 
 def simulate(data: PreparedData, config=BacktestConfig()):
-    model_name = 'ecr2-ar-v1'
+    model_name = 'ecr-ar-v1'
     parameters = {'model': model_name, 'score': asdict(data.score_config),
                   'backtest': asdict(config), 'data_id': data.data_id}
     strategy_id = hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()[:16]
@@ -109,7 +113,8 @@ def simulate(data: PreparedData, config=BacktestConfig()):
     # Shared across cohorts: eligibility and buffer metrics do not depend on holdings.
     eligibility = (np.isfinite(data.scores) & np.isfinite(data.nav) & (data.nav > 0)
                    & (data.days >= config.min_remaining_days))
-    buffer_panel = data.buffers if config.buffer_metric == 'buffer_integrity' else data.dbb
+    buffer_panel = {'buffer_integrity': data.buffers, 'dbb': data.dbb,
+                    'cap_integrity': data.caps}[config.buffer_metric]
     diagnostics, decisions, candidates, daily, summaries = [], [], [], [], []
 
     for cohort in config.cohorts:
@@ -164,11 +169,12 @@ def simulate(data: PreparedData, config=BacktestConfig()):
             event.update({'Strategy ID': strategy_id, 'Event ID': f'{strategy_id}/{cohort}/{event_number}',
                           'Event Type': event_type, 'Signal Date': data.dates[signal_i],
                           'Execution Date': date, 'From Fund': outgoing,
-                          'Selection Score at Signal': signal_score if signal_score is not None else row.ecr2,
+                          'Selection Score at Signal': signal_score if signal_score is not None else row.ecr,
                           'Threshold': config.threshold, 'Comparator': config.comparator,
                           'Review': config.review, 'Data ID': data.data_id,
                           'Model': model_name, 'Trigger': config.trigger,
-                          'Buffer Metric': config.buffer_metric, 'Buffer Drop Threshold': config.buffer_drop})
+                          'Buffer Metric': config.buffer_metric, 'Buffer Drop Threshold': config.buffer_drop,
+                          'Metric Floor': config.metric_floor, 'Fresh Reference Score': 1.0})
             diagnostics.append(event)
 
         snapshot(start, held, initial_signal, 'initial', signal_score=data.scores[initial_signal, held])
@@ -228,6 +234,8 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                                   'Buffer Metric': config.buffer_metric,
                                   'Entry Buffer Score': entry_buffer, 'Held Buffer Score': buffer_panel[i, held],
                                   'Buffer Deterioration': deterioration, 'Buffer Drop Threshold': config.buffer_drop,
+                                  'Metric Floor': config.metric_floor, 'Fresh Reference Score': 1.0,
+                                  'Metric Fraction of Fresh': buffer_panel[i, held],
                                   'Trigger': config.trigger})
                 if config.candidate_audit:
                     order = sorted(available, key=lambda j: (-data.scores[i, j], j != held, data.tickers[j]))
@@ -235,7 +243,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                     for j, ticker in enumerate(data.tickers):
                         candidates.append({'Strategy ID': strategy_id, 'Review ID': review_id,
                                            'Cohort': cohort.title(), 'Date': date, 'Fund': ticker,
-                                           'ECR 2.0': data.scores[i, j], 'Eligible': bool(eligible[j]),
+                                           'ECR': data.scores[i, j], 'Eligible': bool(eligible[j]),
                                            'Rank': ranks.get(j), 'Best': j == best, 'Action': action})
                 if action == 'switch':
                     held, last_trade = best, i
@@ -271,7 +279,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
     if not candidate_frame.empty:
         raw = data.rows.reset_index().rename(columns={'date': 'Date', 'ticker': 'Fund',
                                                       **{v: k for k, v in DIAGNOSTIC_MAP.items()}})
-        columns = ['Date', 'Fund', *[c for c in DIAGNOSTIC_MAP if c != 'ECR 2.0']]
+        columns = ['Date', 'Fund', *[c for c in DIAGNOSTIC_MAP if c != 'ECR']]
         candidate_frame = candidate_frame.merge(raw[columns], on=['Date', 'Fund'], how='left',
                                                 validate='many_to_one')
     return {'parameters': parameters, 'strategy_id': strategy_id,
