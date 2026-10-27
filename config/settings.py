@@ -1,217 +1,75 @@
-"""
-Configuration settings for backtest framework.
-All parameters in one place for easy modification.
+"""Explicit, serializable parameters for the Website Metrics AR model."""
+from dataclasses import asdict, dataclass
+import math
 
-This file now generates 68 unique strategy combinations:
-- GROUP 1-4: Time-based rebalancing (20 strategies)
-- GROUP 5-10: Threshold-based triggers (48 strategies)
-- Total: 68 strategies × 12 launch months = 816 simulations
-"""
-
-import os
-
-# =============================================================================
-# FILE PATHS
-# =============================================================================
-
-# Base directories
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-INPUT_DIR = os.path.join(BASE_DIR, 'input_data')
-OUTPUT_DIR = os.path.join(BASE_DIR, 'output')
-
-# Input files
-DATA_FILE = os.path.join(INPUT_DIR, 'data.csv')
-BENCHMARK_FILE = os.path.join(INPUT_DIR, 'benchmark_ts.csv')
-ROLL_DATES_FILE = os.path.join(INPUT_DIR, 'roll_dates.csv')
-
-# Output subdirectories
-RESULTS_DIR = os.path.join(OUTPUT_DIR, 'backtest_results')
-REGIME_DIR = os.path.join(OUTPUT_DIR, 'regime_analysis')
-TRADE_LOG_DIR = os.path.join(OUTPUT_DIR, 'trade_logs')
-
-# Create output directories if they don't exist
-for directory in [RESULTS_DIR, REGIME_DIR, TRADE_LOG_DIR]:
-    os.makedirs(directory, exist_ok=True)
-
-# =============================================================================
-# BACKTEST PARAMETERS
-# =============================================================================
-
-COMMON_START_DATE = None  # Default: use all available data
-COMMON_START_DATE = '2021-01-19'  # Align to BUFR inception
-# COMMON_START_DATE = '2021-07-01'  # Post-COVID period
-# COMMON_START_DATE = '2022-01-01'  # Recent data only
-
-# Fund series
-SERIES = 'F'  # F-series = 10% buffer
-
-MONTH_MAP = {
-    'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
-    'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12
-}
-
-# Launch months
-LAUNCH_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-                 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
-LAUNCH_MONTHS = ['FEB','SEP', ]
-
-# For testing, can use subset
-# LAUNCH_MONTHS = ['MAR', 'JUN', 'SEP', 'DEC']
-
-# =============================================================================
-# MARKET REGIME PARAMETERS
-# =============================================================================
-
-REGIME_WINDOW_MONTHS = 6
-REGIME_BULL_THRESHOLD = 0.10   # 5% gain = bull
-REGIME_BEAR_THRESHOLD = -0.10  # -5% loss = bear  ← More sensitive
-
-# =============================================================================
-# REBALANCING FREQUENCIES
-# =============================================================================
-
-REBALANCE_FREQUENCIES = ['monthly', 'quarterly', 'semi_annual', 'annual']
-
-# =============================================================================
-# THRESHOLD PARAMETERS
-# =============================================================================
-
-# Standard thresholds for threshold-based triggers
-THRESHOLD_LEVELS = [0.15, 0.50, 0.85]  # 15%, 50%, 85%
-
-# =============================================================================
-# TRIGGER/SELECTION COMBINATIONS TO TEST
-# =============================================================================
-
-def generate_combo_configs():
-    """
-    Generate all strategy combinations programmatically.
-
-    NOW INCLUDES:
-    - GROUP 13: Time-Based + Remaining Buffer Selection (4 strategies)
-    - GROUP 14: Buffer Threshold Triggers (12 strategies)
-
-    Returns:
-        List of dicts with 'trigger_type', 'trigger_params', 'selection_func_name'
-    """
-    combos = []
-
-    # ... existing GROUP 1-12 code ...
-
-    # =========================================================================
-    # GROUP 13: Time-Based + Remaining Buffer Selection (BEARISH)
-    # Count: 4 strategies
-    # =========================================================================
-
-    for freq in REBALANCE_FREQUENCIES:
-        combos.append({
-            'trigger_type': 'rebalance_time_period',
-            'trigger_params': {'frequency': freq},
-            'selection_func_name': 'select_remaining_buffer_lowest',
-            'group': 'GROUP_13_TIME_BUFFER_BEARISH',
-            'description': f'{freq.title()} rebalance to lowest remaining buffer'
-        })
-
-    # =========================================================================
-    # GROUP 14: Buffer Threshold Triggers (BEARISH)
-    # Count: 12 strategies (3 thresholds × 4 selections)
-    # =========================================================================
-
-    # Selection algorithms that pair well with buffer triggers
-    buffer_selections = [
-        'select_remaining_buffer_lowest',  # Double bearish
-        'select_downside_buffer_lowest',  # Defensive pairing
-        'select_most_recent_launch',  # Fresh protection
-        'select_cap_utilization_lowest'  # Upside opportunity
-    ]
-
-    for threshold in THRESHOLD_LEVELS:  # [0.15, 0.50, 0.85]
-        for selection in buffer_selections:
-            combos.append({
-                'trigger_type': 'remaining_buffer_threshold',
-                'trigger_params': {'threshold': threshold},
-                'selection_func_name': selection,
-                'group': 'GROUP_14_BUFFER_THRESHOLD_BEARISH',
-                'description': f'Switch at {threshold * 100:.0f}% buffer to {selection}'
-            })
-
-    return combos
-
-# Generate all combinations
-COMBO_CONFIGS = generate_combo_configs()
-
-# =============================================================================
-# CONFIGURATION SUMMARY
-# =============================================================================
-
-def print_config_summary():
-    """
-    Print summary of all strategy combinations.
-    """
-    print("\n" + "=" * 80)
-    print("STRATEGY CONFIGURATION SUMMARY")
-    print("=" * 80)
-
-    total_combos = len(COMBO_CONFIGS)
-    total_sims = total_combos * len(LAUNCH_MONTHS)
-
-    # Group counts
-    from collections import defaultdict
-    group_counts = defaultdict(int)
-
-    for combo in COMBO_CONFIGS:
-        group = combo['group']
-        group_counts[group] += 1
+MONTHS = ('JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+          'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC')
 
 
-    group_order = [
-        'GROUP_1_TIME_NEUTRAL',
-        'GROUP_2A_TIME_CAP_BULLISH',
-        'GROUP_2B_TIME_CAP_BEARISH',
-        'GROUP_3A_TIME_DOWNSIDE_BULLISH',
-        'GROUP_3B_TIME_DOWNSIDE_BEARISH',
-        'GROUP_4A_TIME_UTIL_BULLISH',
-        'GROUP_4B_TIME_UTIL_BEARISH',
-        'GROUP_5_CAP_THRESHOLD_BULLISH',
-        'GROUP_6A_CAP_THRESHOLD_CAP_BULLISH',
-        'GROUP_6B_CAP_THRESHOLD_CAP_NEUTRAL',
-        'GROUP_7_UTIL_THRESHOLD_BULLISH',
-        'GROUP_8A_UTIL_THRESHOLD_UTIL_BULLISH',
-        'GROUP_8B_UTIL_THRESHOLD_UTIL_NEUTRAL',
-        'GROUP_9_DOWNSIDE_THRESHOLD_BEARISH',
-        'GROUP_10A_DOWNSIDE_THRESHOLD_DOWNSIDE_NEUTRAL',
-        'GROUP_10B_DOWNSIDE_THRESHOLD_DOWNSIDE_BEARISH',
-        'GROUP_11_TIME_COST',
-        'GROUP_12A_CAP_THRESHOLD_COST',
-        'GROUP_12B_UTIL_THRESHOLD_COST',
-        'GROUP_12C_DOWNSIDE_THRESHOLD_COST'
-    ]
+@dataclass(frozen=True)
+class ScoreConfig:
+    dbb_weight: float = 1.5
+    reset_weight: float = 1.2
+    buffer_exponent: float = 0.5
+    cap_exponent: float = 0.3
+    period_bonus: float = 0.3
+    dbb_decay: float = 5.0
+    sigma_down: float = 0.07
+    sigma_up: float = 0.05
+    period_center: float = 180.0
+    period_width: float = 75.0
 
-    for group in group_order:
-        if group in group_counts:
-            count = group_counts[group]
-            sims = count * len(LAUNCH_MONTHS)
-            print(f"{group:50s}: {count:2d} combos × 12 months = {sims:3d} sims")
-
-    print("-" * 80)
-    print(f"{'TOTAL':50s}: {total_combos:2d} combos × 12 months = {total_sims:3d} sims")
-    print("=" * 80 + "\n")
+    def __post_init__(self):
+        for name, value in asdict(self).items():
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f'{name} must be finite and nonnegative')
+        for name in ('sigma_down', 'sigma_up', 'period_width'):
+            if getattr(self, name) <= 0:
+                raise ValueError(f'{name} must be positive')
 
 
-# =============================================================================
-# BUFFER LEVELS BY SERIES
-# =============================================================================
+@dataclass(frozen=True)
+class BacktestConfig:
+    threshold: float = 1.5
+    comparator: str = '<='
+    review: str = 'monthly'
+    min_holding_days: int = 0
+    start_date: str = '2021-01-19'
+    end_date: str | None = None
+    cohorts: tuple[str, ...] = MONTHS
+    min_remaining_days: int = 0
+    execution_lag: int = 0
+    cost_bps: float = 0.0
+    candidate_audit: bool = True
+    initial_selection: str = 'cohort'
+    trigger: str = 'ecr'
+    buffer_metric: str = 'buffer_integrity'
+    buffer_drop: float = 0.20
 
-BUFFER_LEVELS = {
-    'F': 0.10,  # 10% buffer
-    'G': 0.15,  # 15% buffer
-    'D': 0.05   # 5% deductible, then up to 30% buffer
-}
-
-# =============================================================================
-# PERFORMANCE METRICS SETTINGS
-# =============================================================================
-
-ANNUALIZATION_FACTOR = 252  # Trading days per year
-RISK_FREE_RATE = 0.0        # For Sharpe ratio calculation
-
+    def __post_init__(self):
+        if self.initial_selection not in ('cohort', 'highest_score'):
+            raise ValueError('initial_selection must be cohort or highest_score')
+        if self.trigger not in ('ecr', 'buffer_drop', 'ecr_or_buffer', 'ecr_and_buffer'):
+            raise ValueError('unknown trigger')
+        if self.buffer_metric not in ('buffer_integrity', 'dbb'):
+            raise ValueError('buffer_metric must be buffer_integrity or dbb')
+        if not math.isfinite(self.buffer_drop) or not 0 < self.buffer_drop <= 1:
+            raise ValueError('buffer_drop must be in (0, 1]')
+        if not math.isfinite(self.threshold) or self.threshold < 0:
+            raise ValueError('threshold must be finite and nonnegative')
+        if self.comparator not in ('<', '<='):
+            raise ValueError('comparator must be < or <=')
+        if self.review not in ('daily', 'monthly'):
+            raise ValueError('review must be daily or monthly')
+        for name in ('min_holding_days', 'min_remaining_days'):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f'{name} must be a nonnegative integer')
+        if self.execution_lag not in (0, 1):
+            raise ValueError('execution_lag must be 0 (same close) or 1 (next close)')
+        if not math.isfinite(self.cost_bps) or not 0 <= self.cost_bps < 10000:
+            raise ValueError('cost_bps must be in [0, 10000)')
+        if not self.cohorts or len(set(self.cohorts)) != len(self.cohorts):
+            raise ValueError('cohorts must be nonempty and unique')
+        if any(c not in MONTHS for c in self.cohorts):
+            raise ValueError('unknown cohort')

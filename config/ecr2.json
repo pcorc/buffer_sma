@@ -1,0 +1,23 @@
+{
+  "score": {
+    "dbb_weight": 1.5,
+    "reset_weight": 1.2,
+    "buffer_exponent": 0.5,
+    "cap_exponent": 0.3,
+    "period_bonus": 0.3,
+    "dbb_decay": 5.0,
+    "sigma_down": 0.07,
+    "sigma_up": 0.05,
+    "period_center": 180.0,
+    "period_width": 75.0
+  },
+  "backtest": {
+    "threshold": 1.5,
+    "comparator": "<=",
+    "review": "monthly",
+    "min_holding_days": 0,
+    "start_date": "2021-01-19",
+    "execution_lag": 0,
+    "cost_bps": 0
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "source": "ECR vs ECR + Par Proximity Methodology (5).xlsx",
+  "sha256": "35868d9a0c0dcf1dbff1095263ba244bf34fd45dacf6587809b15228ff7bdac9",
+  "sheet": "Website Metrics",
+  "raw_columns": "A:T",
+  "golden_components": "AM:AR (Excel cached values)",
+  "rows": 16978,
+  "diagnostics_sheet": "ECR 2.0 Diagnostics",
+  "diagnostics_rows": 166,
+  "date_min": "2019-11-06 00:00:00",
+  "date_max": "2026-03-27 00:00:00"
+}

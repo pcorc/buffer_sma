@@ -1,533 +1,280 @@
-"""
-Core backtesting engine for single ticker strategy.
-"""
+"""Indexed ECR 2.0 simulation; scores are computed once for all cohorts."""
+from dataclasses import asdict, dataclass
+import hashlib
+import json
 
-import pandas as pd
 import numpy as np
-from core.triggers import get_trigger_function
-from core.selections import get_selection_function, RebalanceScoringTracker
-from config import settings
-from utils.date_utils import get_rebalance_trading_dates
-from core.selections import compute_ecr_scores
-
-def run_single_ticker_backtest(df_enriched, df_benchmarks, launch_month,
-                               trigger_config, selection_func, roll_dates_dict, series='F',
-                               df_regimes=None):
-    """
-    Core backtest engine for single ticker strategy.
-
-    Simulates a strategy that:
-    1. Starts with a specific launch month fund (e.g., FMAR)
-    2. Evaluates trigger conditions daily or on roll dates
-    3. When triggered, uses selection algorithm to pick new fund
-    4. Tracks performance vs 3 benchmarks (SPY, BUFR, buy-and-hold)
-
-    Parameters:
-      df_enriched: Preprocessed fund data with derived metrics
-      df_benchmarks: DataFrame with Date, SPY, BUFR columns (with daily returns)
-      df_regimes: Optional DataFrame with S&P 500 regime data (for regime-adaptive strategies)
-      launch_month: Launch month abbreviation (e.g., 'MAR')
-      trigger_config: Dict with 'type' and 'params' keys
-      selection_func: Function reference for fund selection
-      roll_dates_dict: Dict of roll dates lists by frequency
-      series: Fund series letter (default 'F')
-
-    Returns:
-      Dict with comprehensive backtest results including:
-        - Performance metrics (returns, Sharpe, volatility, max DD)
-        - Benchmark comparisons (vs SPY, BUFR, buy-and-hold)
-        - Daily NAV series
-        - Trade history
-    """
-    # print(f"\n{'=' * 80}")
-    # print(f"Running backtest: {launch_month} | {trigger_config['type']} | {selection_func.__name__}")
-    # print(f"{'=' * 80}")
-    print(f"  → Starting: {launch_month} | {trigger_config['type']} | {selection_func.__name__}")
-
-    tracker = RebalanceScoringTracker()
-
-    # Initialize
-    current_fund = series + launch_month
-    fund_data = df_enriched[df_enriched['Fund'] == current_fund].copy()
-
-    if fund_data.empty:
-        print(f"ERROR: No data for fund {current_fund}")
-        return None
-
-    BUFR_INCEPTION = pd.Timestamp('2020-07-01')
-
-    # Get roll dates for this fund, filtered to >= BUFR inception
-    fund_roll_dates = sorted([
-        pd.Timestamp(rd) for rd in fund_data['Roll_Date'].dropna().unique()
-        if pd.Timestamp(rd) >= BUFR_INCEPTION
-    ])
-
-    if len(fund_roll_dates) == 0:
-        print(f"ERROR: No valid roll dates for {current_fund} after {BUFR_INCEPTION.date()}")
-        return None
-
-    # Start date is the first available roll date after BUFR inception
-    start_date = fund_roll_dates[0]
-
-    # Filter fund data to start from this aligned date
-    fund_data = fund_data[fund_data['Date'] >= start_date].copy()
-
-    if fund_data.empty:
-        # print(f"ERROR: No fund data after alignment date {start_date.date()}")
-        return None
-
-    end_date = fund_data['Date'].max()
-
-    # Prepare benchmark data
-    df_bench = df_benchmarks.copy()
-    df_bench['Date'] = pd.to_datetime(df_bench['Date'])
-    df_bench = df_bench[(df_bench['Date'] >= start_date) & (df_bench['Date'] <= end_date)].copy()
-    df_bench = df_bench.sort_values('Date').reset_index(drop=True)
-
-    # Initialize tracking - all start at 100
-    strategy_nav = 100.0
-    spy_nav = 100.0
-    bufr_nav = 100.0
-    hold_nav = 100.0
-
-    # Track if this is the first day (to handle initialization)
-    first_day = True
-
-    # Initialize before main loop
-    daily_performance = []
-    trade_history = []
-    num_trades = 0
-    spread_history = []
-    days_since_rebalance = 0
-    df_universe = None
-    df_universe_ecr = None
-
-    # Get business days for iteration
-    all_dates = pd.date_range(start=start_date, end=end_date, freq='B')
-
-    # Prepare trigger-specific data
-    trigger_type = trigger_config['type']
-    trigger_params = trigger_config['params']
-    trigger_func = get_trigger_function(trigger_type)
-
-    if trigger_type == 'rebalance_time_period':
-
-
-        frequency_map = {
-            'monthly': 'M',
-            'quarterly': 'Q',
-            'semi_annual': 'S',
-            'annual': 'A'
-        }
-
-        frequency = trigger_params['frequency']
-        frequency_code = frequency_map.get(frequency, frequency)
-
-        # Get trading dates (T+1) for rebalancing
-        trading_date_pairs = get_rebalance_trading_dates(
-            rebalance_frequency=frequency_code,
-            roll_dates_dict=roll_dates_dict,
-            df_dates=df_enriched['Date'].unique(),
-            start_date=start_date,
-            end_date=end_date
-        )
-
-        # Use trading dates (not roll dates) for actual execution
-        trading_dates_list = [trading_date for roll_date, trading_date in trading_date_pairs]
-
-    elif trigger_type == 'ecr_percentile_trigger':
-        # Pre-extract params once outside the loop
-        ecr_w_dbb    = trigger_params.get('w_dbb', 1)
-        ecr_w_buffer = trigger_params.get('w_buffer', 1)
-        ecr_w_cap    = trigger_params.get('w_cap', 1)
-        ecr_pct_threshold  = trigger_params['percentile_threshold']
-        ecr_min_holding    = trigger_params.get('min_holding_days', 21)
-        ecr_rolling_window = trigger_params.get('rolling_window', 252)
-        ecr_min_abs_spread = trigger_params.get('min_absolute_spread', 0.05)  # ← ADD
-
-
-        # Parse weight_code string into individual weights if provided
-        weight_code = trigger_params.get('weight_code', '111')
-        if len(weight_code) == 3 and weight_code.isdigit():
-            ecr_w_dbb    = int(weight_code[0])
-            ecr_w_buffer = int(weight_code[1])
-            ecr_w_cap    = int(weight_code[2])
-
-    elif trigger_type == 'ecr_score_threshold':
-        ecr_w_dbb = int(trigger_params.get('weight_code', '111')[0])
-        ecr_w_buffer = int(trigger_params.get('weight_code', '111')[1])
-        ecr_w_cap = int(trigger_params.get('weight_code', '111')[2])
-        ecr_score_thresh = trigger_params['score_threshold']
-        ecr_min_holding = trigger_params.get('min_holding_days', 63)
-
-    elif trigger_type == 'ecr_percentile_rank':
-        ecr_w_dbb = int(trigger_params.get('weight_code', '111')[0])
-        ecr_w_buffer = int(trigger_params.get('weight_code', '111')[1])
-        ecr_w_cap = int(trigger_params.get('weight_code', '111')[2])
-        ecr_pct_threshold = trigger_params['percentile_threshold']
-        ecr_min_holding = trigger_params.get('min_holding_days', 22)
-
-    elif trigger_type == 'ecr_rank_threshold':
-        ecr_w_dbb = int(trigger_params.get('weight_code', '111')[0])
-        ecr_w_buffer = int(trigger_params.get('weight_code', '111')[1])
-        ecr_w_cap = int(trigger_params.get('weight_code', '111')[2])
-        ecr_rank_threshold = trigger_params['rank_threshold']
-        ecr_min_holding = trigger_params.get('min_holding_days', 22)
-
-    # Main backtest loop
-    for current_date in all_dates:
-        # Get current fund data
-        current_fund_data = df_enriched[
-            (df_enriched['Fund'] == current_fund) &
-            (df_enriched['Date'] == current_date)
-            ]
-
-        if current_fund_data.empty:
-            continue
-
-        # Progress indicator for ecr_percentile_trigger (slow daily scoring)
-        # if trigger_type in ('ecr_score_threshold', 'ecr_percentile_trigger', 'ecr_percentile_rank') and current_date.day == 1:
-        #     print(f"    {launch_month} | {current_date.strftime('%Y-%m')} | "
-        #           f"trades={num_trades} | days_held={days_since_rebalance}")
-
-        current_fund_row = current_fund_data.iloc[0]
-        daily_return = current_fund_row['daily_return']
-
-        # On first day, just initialize NAVs at 100 without applying returns
-        if first_day:
-            first_day = False
-
-        else:
-            strategy_nav *= (1 + daily_return)
-
-            # Update benchmark NAVs
-            bench_data = df_bench[df_bench['Date'] == current_date]
-            if not bench_data.empty:
-                spy_nav *= (1 + bench_data.iloc[0]['SPY_daily_return'])
-                bufr_nav *= (1 + bench_data.iloc[0]['BUFR_daily_return'])
-
-            # Update buy-and-hold NAV
-            hold_fund = series + launch_month
-            hold_data = df_enriched[
-                (df_enriched['Fund'] == hold_fund) &
-                (df_enriched['Date'] == current_date)
-                ]
-            if not hold_data.empty:
-                hold_nav *= (1 + hold_data.iloc[0]['daily_return'])
-
-            # Track days since last rebalance for ecr_percentile_trigger
-            days_since_rebalance += 1
-
-        # Store daily performance with comprehensive roll date metrics
-
-        # Current values
-        current_fund_nav = current_fund_row.get('Fund Value (USD)', None)
-        current_ref_index = current_fund_row.get('Reference Asset Value (USD)', None)
-        current_remaining_cap_pct = current_fund_row.get('Remaining Cap', None)
-        current_downside_before_buffer = current_fund_row.get('Downside Before Buffer', None)
-
-        # Roll date reference values (constant throughout period)
-        roll_date = current_fund_row.get('Roll_Date', None)
-        starting_fund_nav = current_fund_row.get('Starting_Fund_Value', None)
-        starting_ref_index = current_fund_row.get('Starting_Ref_Asset_Value', None)
-        original_cap = current_fund_row.get('Original_Cap', None)
-        original_buffer = current_fund_row.get('Original_Buffer', None)
-
-        # Calculate returns from roll date
-        fund_return_from_roll = None
-        ref_index_return_from_roll = None
-
-        if starting_fund_nav and current_fund_nav:
-            fund_return_from_roll = (current_fund_nav - starting_fund_nav) / starting_fund_nav
-
-        if starting_ref_index and current_ref_index:
-            ref_index_return_from_roll = (current_ref_index - starting_ref_index) / starting_ref_index
-
-        daily_performance.append({
-            # Date and identification
-            'Date': current_date,
-            'Current_Fund': current_fund,
-            'Outcome_Period_ID': current_fund_row.get('Outcome_Period_ID', None),
-            'Roll_Date': roll_date,
-
-            # Strategy and benchmark NAVs (cumulative performance)
-            'Strategy_NAV': strategy_nav,
-            'SPY_NAV': spy_nav,
-            'BUFR_NAV': bufr_nav,
-            'Hold_NAV': hold_nav,
-
-            # Roll date reference values (constant within period)
-            'Starting_Fund_NAV': starting_fund_nav,
-            'Starting_Ref_Index': starting_ref_index,
-            'Original_Cap': original_cap,
-            'Original_Buffer': original_buffer,
-            'Total_Outcome_Days': current_fund_row.get('Total_Outcome_Days', None),
-
-            # Current day values
-            'Current_Fund_NAV': current_fund_nav,
-            'Current_Ref_Index': current_ref_index,
-            'Current_Remaining_Cap_Pct': current_remaining_cap_pct,
-            'Remaining_Outcome_Days': current_fund_row.get('Remaining Outcome Days', None),
-
-            # Calculated returns from roll date
-            'Fund_Return_From_Roll': fund_return_from_roll,
-            'Ref_Index_Return_From_Roll': ref_index_return_from_roll,
-
-            # Cap metrics
-            'Cap_Utilization': current_fund_row.get('Cap_Utilization', None),
-            'Cap_Remaining_Pct': current_fund_row.get('Cap_Remaining_Pct', None),
-
-            # Buffer metrics
-            'Downside_Before_Buffer_Pct': current_downside_before_buffer,
-            'Starting_Downside_Before_Buffer': current_fund_row.get('Starting_Downside_Before_Buffer', None)
-        })
-
-        # Evaluate trigger
-        triggered = False
-        trigger_reason = None
-
-        if trigger_type == 'rebalance_time_period':
-            triggered = trigger_func(current_date, trading_dates_list)
-            if triggered:
-                trigger_reason = f"{frequency}_rebalance"
-
-        elif trigger_type == 'ecr_percentile_trigger':
-            # Build universe here — needed before trigger evaluation
-            df_universe_ecr = df_enriched[
-                (df_enriched['Date'] == current_date) &
-                (df_enriched['Fund'].str.startswith(series))
-                ].copy()
-
-            if not df_universe_ecr.empty:
-                triggered, spread = trigger_func(
-                    current_fund=current_fund,
-                    df_universe=df_universe_ecr,
-                    series=series,
-                    w_dbb=ecr_w_dbb,
-                    w_buffer=ecr_w_buffer,
-                    w_cap=ecr_w_cap,
-                    spread_history=spread_history,
-                    percentile_threshold=ecr_pct_threshold,
-                    min_holding_days=ecr_min_holding,
-                    days_since_rebalance=days_since_rebalance,
-                    rolling_window=ecr_rolling_window,
-                    min_absolute_spread=ecr_min_abs_spread  # ← ADD
-
-                )
-                # Always append spread to history regardless of trigger
-                if not np.isnan(spread):
-                    spread_history.append(spread)
-
-                if triggered:
-                    trigger_reason = f"ecr_spread_pct={ecr_pct_threshold}"
-
-        elif trigger_type == 'ecr_score_threshold':
-            df_universe_ecr = df_enriched[
-                (df_enriched['Date'] == current_date) &
-                (df_enriched['Fund'].str.startswith(series))
-                ].copy()
-
-            if not df_universe_ecr.empty:
-                triggered = trigger_func(
-                    current_fund=current_fund,
-                    df_universe=df_universe_ecr,
-                    series=series,
-                    w_dbb=ecr_w_dbb,
-                    w_buffer=ecr_w_buffer,
-                    w_cap=ecr_w_cap,
-                    score_threshold=ecr_score_thresh,
-                    min_holding_days=ecr_min_holding,
-                    days_since_rebalance=days_since_rebalance
-                )
-                if triggered:
-                    trigger_reason = f"ecr_score<{ecr_score_thresh}"
-
-        elif trigger_type == 'ecr_percentile_rank':
-            df_universe_ecr = df_enriched[
-                (df_enriched['Date'] == current_date) &
-                (df_enriched['Fund'].str.startswith(series))
-                ].copy()
-
-            if not df_universe_ecr.empty:
-                triggered = trigger_func(
-                    current_fund=current_fund,
-                    df_universe=df_universe_ecr,
-                    series=series,
-                    w_dbb=ecr_w_dbb,
-                    w_buffer=ecr_w_buffer,
-                    w_cap=ecr_w_cap,
-                    percentile_threshold=ecr_pct_threshold,
-                    min_holding_days=ecr_min_holding,
-                    days_since_rebalance=days_since_rebalance
-                )
-                if triggered:
-                    trigger_reason = f"ecr_pct_rank<{ecr_pct_threshold}th"
-
-        elif trigger_type == 'ecr_rank_threshold':
-            df_universe_ecr = df_enriched[
-                (df_enriched['Date'] == current_date) &
-                (df_enriched['Fund'].str.startswith(series))
-                ].copy()
-
-            if not df_universe_ecr.empty:
-                triggered = trigger_func(
-                    current_fund=current_fund,
-                    df_universe=df_universe_ecr,
-                    series=series,
-                    w_dbb=ecr_w_dbb,
-                    w_buffer=ecr_w_buffer,
-                    w_cap=ecr_w_cap,
-                    rank_threshold=ecr_rank_threshold,
-                    min_holding_days=ecr_min_holding,
-                    days_since_rebalance=days_since_rebalance
-                )
-                if triggered:
-                    trigger_reason = f"ecr_rank>{ecr_rank_threshold}"
-
-        else:
-            # All other threshold-based triggers
-            threshold = trigger_params['threshold']
-            triggered = trigger_func(current_fund_row, threshold)
-            if triggered:
-                trigger_reason = f"{trigger_type}={threshold}"
-
-        if triggered:
-            if trigger_type in ('ecr_percentile_trigger',
-                                'ecr_score_threshold',
-                                'ecr_relative_spread',
-                                'ecr_percentile_rank',
-                                'ecr_rank_threshold'):
-                df_universe = df_universe_ecr
-
-            else:
-                df_universe = df_enriched[
-                    (df_enriched['Date'] == current_date) &
-                    (df_enriched['Fund'].str.startswith(series))
-                    ].copy()
-
-            if not df_universe.empty:
-                # Record outgoing fund score before selection
-                if trigger_type in ('ecr_score_threshold', 'ecr_relative_spread', 'ecr_percentile_rank', 'ecr_rank_threshold'):
-                    all_scores = compute_ecr_scores(df_universe, series, ecr_w_dbb, ecr_w_buffer, ecr_w_cap)
-                    outgoing_score = all_scores.get(current_fund, np.nan)
-                    best_score = max(all_scores.values()) if all_scores else np.nan
-                else:
-                    all_scores = {}
-                    outgoing_score = np.nan
-                    best_score = np.nan
-
-                new_fund = selection_func(
-                    df_universe,
-                    current_date,
-                    series,
-                    df_regimes=df_regimes,
-                    tracker=tracker,
-                    month=launch_month
-                )
-
-                if new_fund and new_fund != current_fund:
-                    trade_history.append({
-                        'Date': current_date,
-                        'From_Fund': current_fund,
-                        'To_Fund': new_fund,
-                        'Trigger_Reason': trigger_reason,
-                        'NAV_at_Switch': strategy_nav,
-                        'Outgoing_ECR_Score': outgoing_score,
-                        'Incoming_ECR_Score': all_scores.get(new_fund, np.nan),
-                        'Score_Spread': (best_score - outgoing_score) / best_score
-                        if pd.notna(outgoing_score) and best_score > 0 else np.nan,
-                    })
-                    current_fund = new_fund
-                    num_trades += 1
-                    days_since_rebalance = 0
-
-                    if trigger_type in ('ecr_percentile_trigger', 'ecr_score_threshold', 'ecr_percentile_rank', 'ecr_rank_threshold'):
-                        scores = compute_ecr_scores(df_universe, series, ecr_w_dbb, ecr_w_buffer, ecr_w_cap)
-                        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-                        print(f"    *** TRADE {num_trades} on {current_date.strftime('%Y-%m-%d')}: "
-                              f"→ {new_fund} | scores: "
-                              f"{' | '.join([f'{f}={s:.3f}' for f, s in ranked])}")
-
-            else:
-                print(f"     ❌ No universe data available")
-
-    # Calculate performance metrics
-    df_perf = pd.DataFrame(daily_performance)
-
-    if len(df_perf) < 2:
-        # print("ERROR: Insufficient data for performance calculation")
-        return None
-
-    # Strategy metrics
-    strat_total_return = (strategy_nav / 100) - 1
-    strat_days = (end_date - start_date).days
-    strat_ann_return = ((strategy_nav / 100) ** (365 / strat_days)) - 1 if strat_days > 0 else 0
-    strat_daily_returns = df_perf['Strategy_NAV'].pct_change().dropna()
-    strat_vol = strat_daily_returns.std() * np.sqrt(252)
-    strat_sharpe = strat_ann_return / strat_vol if strat_vol > 0 else 0
-
-    # Calculate max drawdown
-    cummax = df_perf['Strategy_NAV'].cummax()
-    drawdown = (df_perf['Strategy_NAV'] - cummax) / cummax
-    strat_max_dd = drawdown.min()
-
-    # Benchmark metrics
-    spy_total_return = (spy_nav / 100) - 1
-    spy_ann_return = ((spy_nav / 100) ** (365 / strat_days)) - 1 if strat_days > 0 else 0
-
-    bufr_total_return = (bufr_nav / 100) - 1
-    bufr_ann_return = ((bufr_nav / 100) ** (365 / strat_days)) - 1 if strat_days > 0 else 0
-
-    hold_total_return = (hold_nav / 100) - 1
-    hold_ann_return = ((hold_nav / 100) ** (365 / strat_days)) - 1 if strat_days > 0 else 0
-
-    # Excess returns
-    vs_spy_excess = strat_total_return - spy_total_return
-    vs_bufr_excess = strat_total_return - bufr_total_return
-    vs_hold_excess = strat_total_return - hold_total_return
-
-    # print(f"\nResults Summary:")
-    # print(f"  Strategy Return: {strat_total_return * 100:+.2f}%")
-    # print(f"  vs SPY: {vs_spy_excess * 100:+.2f}%")
-    # print(f"  vs BUFR: {vs_bufr_excess * 100:+.2f}%")
-    # print(f"  vs Hold: {vs_hold_excess * 100:+.2f}%")
-    # print(f"  Sharpe Ratio: {strat_sharpe:.2f}")
-    # print(f"  Max Drawdown: {strat_max_dd * 100:.2f}%")
-    # print(f"  Number of Trades: {num_trades}")
-
-    # Return comprehensive results
-    return {
-        'launch_month': launch_month,
-        'trigger_type': trigger_type,
-        'trigger_params': trigger_params,
-        'selection_algo': selection_func.__name__,
-        'strategy_intent': trigger_config.get('strategy_intent', 'neutral'),  # ADD THIS LINE
-        'start_date': start_date,
-        'end_date': end_date,
-        'num_trades': num_trades,
-
-        'strategy_total_return': strat_total_return,
-        'strategy_ann_return': strat_ann_return,
-        'strategy_sharpe': strat_sharpe,
-        'strategy_volatility': strat_vol,
-        'strategy_max_dd': strat_max_dd,
-
-        'spy_total_return': spy_total_return,
-        'spy_ann_return': spy_ann_return,
-
-        'bufr_total_return': bufr_total_return,
-        'bufr_ann_return': bufr_ann_return,
-
-        'hold_total_return': hold_total_return,
-        'hold_ann_return': hold_ann_return,
-
-        'vs_spy_excess': vs_spy_excess,
-        'vs_bufr_excess': vs_bufr_excess,
-        'vs_hold_excess': vs_hold_excess,
-
-        'daily_performance': df_perf,
-        'trade_history': pd.DataFrame(trade_history) if trade_history else pd.DataFrame(),
-
-        'scoring_tracker': tracker,
-        'spread_history': spread_history,
-    }
+import pandas as pd
+
+from config.settings import BacktestConfig, MONTHS, ScoreConfig
+from core.scoring import score_funds
+
+DIAGNOSTIC_MAP = {
+    'Ref Asset Return': 'reference_asset_return',
+    'Rem. Outcome Days': 'remaining_outcome_days',
+    'Rem. Cap (net)': 'remaining_cap_net',
+    'Rem. Buffer (net)': 'remaining_buffer_net',
+    'Downside Before Buffer (net)': 'downside_before_buffer_net',
+    'DBB': 'dbb', 'Buffer Integ.': 'buffer_integrity', 'Cap Integ.': 'cap_integrity',
+    'Reset Prox.': 'reset_proximity', 'Period Pos.': 'period_position', 'ECR 2.0': 'ecr2',
+}
+DIAGNOSTIC_COLUMNS = ['Cohort', 'Switch #', 'Date', 'Fund', *DIAGNOSTIC_MAP]
+
+
+@dataclass
+class PreparedData:
+    rows: pd.DataFrame
+    dates: pd.DatetimeIndex
+    tickers: list[str]
+    nav: np.ndarray
+    scores: np.ndarray
+    days: np.ndarray
+    benchmarks: np.ndarray
+    cycles: pd.DatetimeIndex
+    score_config: ScoreConfig
+    data_id: str
+    buffers: np.ndarray
+    dbb: np.ndarray
+
+
+def prepare_data(metrics, benchmarks, cycles, score_config=ScoreConfig()):
+    # Only the F-series universe is supported; remove unrelated assets once.
+    frame = metrics.loc[metrics.ticker.isin(['F' + c for c in MONTHS])].copy()
+    if frame.empty:
+        raise ValueError('No F-series observations')
+    if frame.duplicated(['date', 'ticker']).any():
+        raise ValueError('Duplicate ticker/date observations')
+    frame = frame.sort_values(['date', 'ticker']).reset_index(drop=True)
+    dates = pd.DatetimeIndex(frame.date.unique()).sort_values()
+    tickers = sorted(frame.ticker.unique())
+    scored = pd.concat([frame, score_funds(frame, score_config)], axis=1)
+
+    def matrix(column):
+        return scored.pivot(index='date', columns='ticker', values=column).reindex(
+            index=dates, columns=tickers).to_numpy(dtype=float)
+
+    digest = hashlib.sha256()
+    for value in (frame, benchmarks):
+        digest.update(pd.util.hash_pandas_object(value, index=True).values.tobytes())
+    digest.update(pd.DatetimeIndex(cycles).asi8.tobytes())
+    return PreparedData(scored.set_index(['date', 'ticker']), dates, tickers,
+                        matrix('fund_value'), matrix('ecr2'), matrix('remaining_outcome_days'),
+                        benchmarks.reindex(dates)[['SPY', 'BUFR']].to_numpy(dtype=float),
+                        pd.DatetimeIndex(cycles).sort_values(), score_config, digest.hexdigest(),
+                        matrix('buffer_integrity'), matrix('dbb'))
+
+
+def threshold_fires(score, config):
+    if not np.isfinite(score):
+        raise ValueError('Held fund has no valid ECR 2.0 score on review date')
+    return score <= config.threshold if config.comparator == '<=' else score < config.threshold
+
+
+def trigger_signals(score, buffer_value, entry_buffer, config):
+    ecr = threshold_fires(score, config)
+    if not np.isfinite(buffer_value):
+        raise ValueError('Invalid buffer metric on review date')
+    # A zero entry score has no meaningful relative deterioration baseline.
+    deterioration = 1 - buffer_value / entry_buffer if entry_buffer > 0 else np.nan
+    buffer = bool(entry_buffer > 0 and buffer_value <= entry_buffer * (1 - config.buffer_drop))
+    fired = {'ecr': ecr, 'buffer_drop': buffer, 'ecr_or_buffer': ecr or buffer,
+             'ecr_and_buffer': ecr and buffer}[config.trigger]
+    return bool(fired), bool(ecr), buffer, deterioration
+
+
+def _start_index(data, cohort, config):
+    earliest = pd.Timestamp(config.start_date)
+    month = MONTHS.index(cohort) + 1
+    for cycle in data.cycles[data.cycles.month == month]:
+        # First observed trading session strictly after the cohort's cycle date.
+        index = data.dates.searchsorted(cycle, side='right')
+        if index < len(data.dates) and data.dates[index] >= earliest:
+            # Do not jump across months of missing observations.
+            if (data.dates[index] - cycle).days > 7:
+                continue
+            return int(index)
+    raise ValueError(f'No initial cycle/trading date for {cohort}')
+
+
+def simulate(data: PreparedData, config=BacktestConfig()):
+    model_name = 'ecr2-ar-v1'
+    parameters = {'model': model_name, 'score': asdict(data.score_config),
+                  'backtest': asdict(config), 'data_id': data.data_id}
+    strategy_id = hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()[:16]
+    end = pd.Timestamp(config.end_date) if config.end_date else data.dates[-1]
+    if pd.Timestamp(config.start_date) > end:
+        raise ValueError('start_date is after end_date')
+    stop = int(data.dates.searchsorted(end, side='right'))
+    reviews = set(data.cycles)
+    # Shared across cohorts: eligibility and buffer metrics do not depend on holdings.
+    eligibility = (np.isfinite(data.scores) & np.isfinite(data.nav) & (data.nav > 0)
+                   & (data.days >= config.min_remaining_days))
+    buffer_panel = data.buffers if config.buffer_metric == 'buffer_integrity' else data.dbb
+    diagnostics, decisions, candidates, daily, summaries = [], [], [], [], []
+
+    for cohort in config.cohorts:
+        initial_fund = 'F' + cohort
+        if initial_fund not in data.tickers:
+            raise ValueError(f'Missing cohort fund {initial_fund}')
+        held = initial = data.tickers.index(initial_fund)
+        start = _start_index(data, cohort, config)
+        if start >= stop:
+            raise ValueError(f'No observations in requested period for {cohort}')
+        initial_signal = start
+        if config.initial_selection == 'highest_score':
+            # Keep cohort execution dates comparable; next-close entry uses the previous session's scores.
+            initial_signal = start - config.execution_lag
+            if initial_signal < 0:
+                raise ValueError('No prior session for initial selection signal')
+            available = np.flatnonzero(eligibility[initial_signal])
+            if not len(available):
+                raise ValueError('No eligible initial candidates')
+            held = int(available[np.argmax(data.scores[initial_signal, available])])
+        if config.review == 'monthly':
+            expected = pd.period_range(data.dates[start], data.dates[stop - 1], freq='M')
+            if not set(expected).issubset(set(data.cycles.to_period('M'))):
+                raise ValueError('Monthly cycle calendar does not cover the requested period')
+            for cycle in data.cycles:
+                if data.dates[start] <= cycle <= data.dates[stop - 1] and cycle not in data.dates:
+                    raise ValueError(f'No observation on cycle date {cycle.date()}; check holiday calendar')
+        bench = data.benchmarks[start:stop]
+        if not np.isfinite(bench[[0, -1]]).all() or (bench <= 0).any():
+            raise ValueError(f'Missing benchmark endpoint or invalid NAV for {cohort}')
+        # Preserve interior gaps as NaN; never invent prices or omit strategy sessions.
+        benchmark_gaps = int((~np.isfinite(bench).all(axis=1)).sum())
+        hold_prices = data.nav[start:stop, initial]
+        if not np.isfinite(hold_prices).all() or (hold_prices <= 0).any():
+            raise ValueError(f'Missing or invalid buy-and-hold NAV for {cohort}')
+        if not np.isfinite(data.scores[start, held]) or data.days[start, held] < config.min_remaining_days:
+            raise ValueError(f'Invalid initial score for {initial_fund}')
+        nav, last_trade, switches, event_number = 100.0, start, 0, 0
+        entry_buffer = buffer_panel[start, held]
+        pending = None
+        cohort_daily = []
+
+        def snapshot(i, fund, signal_i, event_type, outgoing=None, signal_score=None):
+            nonlocal event_number
+            event_number += 1
+            date, ticker = data.dates[i], data.tickers[fund]
+            row = data.rows.loc[(date, ticker)]
+            if not row.score_valid:
+                raise ValueError(f'Invalid snapshot for {ticker} on {date.date()}')
+            event = {'Cohort': cohort.title(), 'Switch #': event_number, 'Date': date, 'Fund': ticker}
+            event.update({label: row[column] for label, column in DIAGNOSTIC_MAP.items()})
+            event.update({'Strategy ID': strategy_id, 'Event ID': f'{strategy_id}/{cohort}/{event_number}',
+                          'Event Type': event_type, 'Signal Date': data.dates[signal_i],
+                          'Execution Date': date, 'From Fund': outgoing,
+                          'Selection Score at Signal': signal_score if signal_score is not None else row.ecr2,
+                          'Threshold': config.threshold, 'Comparator': config.comparator,
+                          'Review': config.review, 'Data ID': data.data_id,
+                          'Model': model_name, 'Trigger': config.trigger,
+                          'Buffer Metric': config.buffer_metric, 'Buffer Drop Threshold': config.buffer_drop})
+            diagnostics.append(event)
+
+        snapshot(start, held, initial_signal, 'initial', signal_score=data.scores[initial_signal, held])
+        for i in range(start, stop):
+            date = data.dates[i]
+            return_fund = data.tickers[held]
+            if not np.isfinite(data.nav[i, held]) or data.nav[i, held] <= 0:
+                raise ValueError(f'Missing held NAV for {return_fund} on {date.date()}')
+            if i > start:
+                nav *= data.nav[i, held] / data.nav[i - 1, held]
+            # Pending selections earn the outgoing fund's return until next-close execution.
+            if pending is not None:
+                new, signal_i, signal_score = pending
+                if not np.isfinite(data.nav[i, new]) or data.nav[i, new] <= 0:
+                    raise ValueError('Missing execution NAV for pending selection')
+                snapshot(i, new, signal_i, 'switch', data.tickers[held], signal_score)
+                held, last_trade, switches = new, i, switches + 1
+                entry_buffer = buffer_panel[i, held]
+                nav *= 1 - config.cost_bps / 10000
+                pending = None
+            if i > start and (config.review == 'daily' or date in reviews):
+                held_score = data.scores[i, held]
+                age = i - last_trade
+                eligible = eligibility[i]
+                signal, ecr_signal, buffer_signal, deterioration = trigger_signals(
+                    held_score, buffer_panel[i, held], entry_buffer, config)
+                fired = signal and age >= config.min_holding_days
+                available = np.flatnonzero(eligible)
+                if not len(available):
+                    raise ValueError(f'No eligible funds on {date.date()}')
+                best = int(available[np.argmax(data.scores[i, available])])
+                # Exact ties favor the current holding, then alphabetical ticker order.
+                if eligible[held] and held_score == data.scores[i, best]:
+                    best = held
+                action = 'hold'
+                if fired:
+                    action = 'no_switch' if best == held else 'switch'
+                    if best != held:
+                        if config.execution_lag:
+                            if i + 1 < stop:
+                                pending = (best, i, data.scores[i, best])
+                                action = 'scheduled'
+                            else:
+                                action = 'unexecuted_end'
+                        else:
+                            snapshot(i, best, i, 'switch', data.tickers[held], data.scores[i, best])
+                            nav *= 1 - config.cost_bps / 10000
+                            switches += 1
+                review_id = f'{strategy_id}/{cohort}/review/{date.date()}'
+                decisions.append({'Strategy ID': strategy_id, 'Review ID': review_id,
+                                  'Cohort': cohort.title(), 'Date': date, 'Held Fund': data.tickers[held],
+                                  'Held Score': held_score, 'Best Fund': data.tickers[best],
+                                  'Best Score': data.scores[i, best], 'Holding Days': age,
+                                  'Triggered': fired, 'Action': action,
+                                  'Threshold': config.threshold, 'Comparator': config.comparator,
+                                  'ECR Signal': ecr_signal, 'Buffer Signal': buffer_signal,
+                                  'Buffer Metric': config.buffer_metric,
+                                  'Entry Buffer Score': entry_buffer, 'Held Buffer Score': buffer_panel[i, held],
+                                  'Buffer Deterioration': deterioration, 'Buffer Drop Threshold': config.buffer_drop,
+                                  'Trigger': config.trigger})
+                if config.candidate_audit:
+                    order = sorted(available, key=lambda j: (-data.scores[i, j], j != held, data.tickers[j]))
+                    ranks = {j: n + 1 for n, j in enumerate(order)}
+                    for j, ticker in enumerate(data.tickers):
+                        candidates.append({'Strategy ID': strategy_id, 'Review ID': review_id,
+                                           'Cohort': cohort.title(), 'Date': date, 'Fund': ticker,
+                                           'ECR 2.0': data.scores[i, j], 'Eligible': bool(eligible[j]),
+                                           'Rank': ranks.get(j), 'Best': j == best, 'Action': action})
+                if action == 'switch':
+                    held, last_trade = best, i
+                    entry_buffer = buffer_panel[i, held]
+            record = {'Strategy ID': strategy_id, 'Cohort': cohort.title(), 'Date': date,
+                      'Return Fund': return_fund, 'Fund at Close': data.tickers[held],
+                      'Held ECR Score': data.scores[i, held], 'Held Buffer Score': buffer_panel[i, held],
+                      'Entry Buffer Score': entry_buffer,
+                      'Strategy NAV': nav,
+                      'SPY NAV': 100 * data.benchmarks[i, 0] / data.benchmarks[start, 0],
+                      'BUFR NAV': 100 * data.benchmarks[i, 1] / data.benchmarks[start, 1],
+                      'Hold NAV': 100 * data.nav[i, initial] / data.nav[start, initial]}
+            cohort_daily.append(record)
+        daily.extend(cohort_daily)
+        curve = pd.DataFrame(cohort_daily)
+        returns = curve['Strategy NAV'].pct_change().dropna()
+        total = nav / 100 - 1
+        elapsed = (data.dates[stop - 1] - data.dates[start]).days
+        annual = (nav / 100)**(365 / elapsed) - 1 if elapsed else np.nan
+        volatility = returns.std() * np.sqrt(252)
+        sharpe = returns.mean() / returns.std() * np.sqrt(252) if returns.std() > 0 else np.nan
+        summaries.append({'Strategy ID': strategy_id, 'Cohort': cohort.title(),
+                          'Start': data.dates[start], 'End': data.dates[stop - 1], 'Observations': len(curve),
+                          'Total Return': total, 'Annualized Return': annual,
+                          'Annualized Volatility': volatility, 'Sharpe': sharpe,
+                          'Max Drawdown': (curve['Strategy NAV'] / curve['Strategy NAV'].cummax() - 1).min(),
+                          'Switches': switches, 'Switches per Year': switches * 365 / elapsed if elapsed else np.nan,
+                          'Missing Benchmark Sessions': benchmark_gaps,
+                          'SPY Total Return': curve['SPY NAV'].iloc[-1] / 100 - 1,
+                          'BUFR Total Return': curve['BUFR NAV'].iloc[-1] / 100 - 1,
+                          'vs BUFR Cumulative Excess': total - (curve['BUFR NAV'].iloc[-1] / 100 - 1)})
+    candidate_frame = pd.DataFrame(candidates)
+    if not candidate_frame.empty:
+        raw = data.rows.reset_index().rename(columns={'date': 'Date', 'ticker': 'Fund',
+                                                      **{v: k for k, v in DIAGNOSTIC_MAP.items()}})
+        columns = ['Date', 'Fund', *[c for c in DIAGNOSTIC_MAP if c != 'ECR 2.0']]
+        candidate_frame = candidate_frame.merge(raw[columns], on=['Date', 'Fund'], how='left',
+                                                validate='many_to_one')
+    return {'parameters': parameters, 'strategy_id': strategy_id,
+            'summary': pd.DataFrame(summaries), 'daily': pd.DataFrame(daily),
+            'diagnostics': pd.DataFrame(diagnostics), 'decisions': pd.DataFrame(decisions),
+            'candidates': candidate_frame}
