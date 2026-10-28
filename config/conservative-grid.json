@@ -1,0 +1,24 @@
+{
+  "universes": [
+    {"name": "F annual", "group": "F series", "outcome": "Annual"}
+  ],
+  "portfolio_sizes": [3, 5],
+  "review_cadences": ["monthly", "quarterly"],
+  "triggers": {
+    "ecr": [1.5],
+    "buffer_integrity": [0.7, 0.8, 0.9],
+    "dbb": [0.8, 0.9, 0.95]
+  },
+  "turnover_profiles": [
+    {"name": "Standard"},
+    {"name": "Score improvement", "min_selection_improvement": 0.15},
+    {
+      "name": "Limited turnover",
+      "min_selection_improvement": 0.1,
+      "max_replacements_per_review": 1,
+      "turnover_budget_by_size": {"3": 0.4, "5": 0.25},
+      "weight_band": 0.05
+    }
+  ],
+  "include_single_ticker_reference": true
+}

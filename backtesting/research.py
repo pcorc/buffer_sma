@@ -7,7 +7,7 @@ import time
 
 import pandas as pd
 
-from backtesting.data_pipeline import file_hash, load_benchmarks, load_cycles, load_metrics
+from backtesting.data_pipeline import file_hash, load_benchmarks, load_cycles, load_metric_collection
 from backtesting.engine import prepare_data, simulate
 from config.settings import BacktestConfig, ScoreConfig
 
@@ -25,10 +25,12 @@ class ResearchSession:
     Instantiate a new session after changing source files. Results are newly simulated
     each time; callers should treat the cached prepared data as read-only.
     """
-    def __init__(self, metrics, benchmarks, cycles):
+    def __init__(self, metrics, benchmarks, cycles, supplemental_metrics=()):
         paths = {'metrics': Path(metrics), 'benchmarks': Path(benchmarks), 'cycles': Path(cycles)}
         self.sources = {k: {'path': str(p.resolve()), 'sha256': file_hash(p)} for k, p in paths.items()}
-        self.metrics = load_metrics(metrics)
+        self.sources['supplemental_metrics'] = [
+            {'path': str(Path(p).resolve()), 'sha256': file_hash(p)} for p in supplemental_metrics]
+        self.metrics = load_metric_collection([metrics, *supplemental_metrics])
         self.benchmarks = load_benchmarks(benchmarks)
         self.cycles = load_cycles(cycles)
         self._prepared = OrderedDict()

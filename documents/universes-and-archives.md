@@ -99,14 +99,11 @@ benchmark selection for other asset classes can be extended when data arrives.
 
 ## Trading assumptions
 
-The client presets use next-close execution, zero trading costs and zero minimum
-holding days. These controls already execute in the engine; the new UI provides
-plain-language labels and help. Five basis points means 0.05%, or $5 per $10,000
-of one-way traded capital. Fees apply to actual replacements/weight adjustments,
-not initial entry. A zero holding period adds no restriction. A positive period
-counts observed trading sessions since actual purchase and does not block
-weight-only resizing. Named research experiments that test holding delays retain
-their explicit settings rather than silently turning those tests off.
+The client presets use next-close execution and zero trading costs. Five basis
+points means 0.05%, or $5 per $10,000 of one-way traded capital. Fees apply to
+actual replacements/weight adjustments, not initial entry. The UI's optional
+turnover controls are minimum score improvement, replacement count, turnover
+budget and equal-weight drift bands. New research scripts use these same rules.
 
 ## Where reports go
 

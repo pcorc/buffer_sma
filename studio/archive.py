@@ -11,25 +11,40 @@ from zipfile import ZipFile
 DEFAULT_ARCHIVE_ROOT = r'G:\Shared drives\Portfolio Management\Funds\Archive\Model Portfolio Allocation\ECR Backtest Results'
 
 
-def save_archive(downloads, root, run_name, strategy_id):
-    """Create a unique folder; publish success only after every file is written.
-
-    A failed save raises OSError; callers retain the in-memory ZIP for download.
-    A Windows drive path must never become a literal relative folder on Linux.
-    """
+def archive_root_path(root):
+    """Validate a destination on the machine running the app or research script."""
     root_text = str(root).strip()
     if not root_text:
         raise OSError('Choose an archive folder.')
     if os.name != 'nt' and PureWindowsPath(root_text).drive:
-        raise OSError('This Windows shared drive is not available on the computer running the app.')
+        raise OSError('This Windows shared drive is not available on this computer. Choose an accessible --archive-root.')
     base = Path(root_text).expanduser()
     if not base.is_absolute():
         raise OSError('The archive location must be an absolute path.')
     if os.name == 'nt' and not Path(base.anchor).exists():
         raise OSError(f'The drive {base.anchor} is not connected.')
+    return base
+
+
+def new_archive_path(root, run_name, strategy_id):
+    base = archive_root_path(root)
     name = re.sub(r'[^A-Za-z0-9_-]+', '-', run_name).strip('-')[:45] or 'ECR'
     stamp = datetime.now().strftime('%Y-%m-%d_%H%M%S')
-    folder = base / f'{stamp}_{name}_{strategy_id[:8]}_{uuid4().hex[:6]}'
+    return base / f'{stamp}_{name}_{strategy_id[:8]}_{uuid4().hex[:6]}'
+
+
+def save_archive(downloads, root, run_name, strategy_id, *, folder_name=None):
+    """Create a unique folder; publish success only after every file is written.
+
+    A failed save raises OSError; callers retain the in-memory ZIP for download.
+    A Windows drive path must never become a literal relative folder on Linux.
+    """
+    if folder_name is not None:
+        if not re.fullmatch(r'[0-9]{3,6}', folder_name):
+            raise ValueError('Batch folder name must be a short numeric identifier.')
+        folder = archive_root_path(root) / folder_name
+    else:
+        folder = new_archive_path(root, run_name, strategy_id)
     created = False
     try:
         folder.mkdir(parents=True, exist_ok=False)

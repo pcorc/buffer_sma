@@ -6,10 +6,12 @@ uses the same engine, inputs and report exporters as the CLI and notebook.
 
 ## Configure a run
 
-1. Choose a client preset and give the run a name. Super Buffer starts with one
+1. Choose the **Fund universe** first: group, outcome period, filters and tickers.
+   Blue checkmarks in matching fund details indicate loaded history. Then choose
+   one of the two client presets and give the run a name. Super Buffer starts with one
    fund and ECR < 1.5; UCITS Conservative starts with three funds and Buffer
    Integrity < 0.80. Both use highest ECR selection, monthly reviews, next-close
-   execution, zero trading cost and zero minimum holding days.
+   execution and zero trading cost.
 2. Choose **Single ticker** or **Fund of funds**, with N from 2 to 12 for FoF.
    N stays fixed throughout a run. Initial capital is split equally; subsequent
    weights drift. Only breached holdings are reconsidered, with their proceeds
@@ -29,8 +31,7 @@ uses the same engine, inputs and report exporters as the CLI and notebook.
    a separate backtest, not another fund in the portfolio. Initial entry is
    the first observed session after that month's qualifying roll date. The
    actual entry date can therefore be later than the selected lower date bound.
-7. Review the live summary and run. Execution, trading costs, minimum holding
-   sessions, remaining outcome days and formula parameters are in expandable
+7. Review the live summary and run. Execution, trading costs, remaining outcome days and formula parameters are in expandable
    sections. Changing the preset restores those preset settings but retains
    the selected test window and launch months.
 
@@ -103,14 +104,13 @@ and export tests; core tests remain usable with `requirements.txt` alone.
 
 ## Conservative experiments
 
-The preset dropdown also includes 34 named UCITS research variants. The
-**Turnover & weight controls** section adds confirmation, minimum score gain,
-replacement entry margin, ticker cooldown, replacement/turnover limits and
-optional equal-weight drift bands. These controls are saved in the same
-replayable JSON. [The conservative research guide](conservative-research.md)
-defines every rule and shows how to run all comparisons. The original client
-presets still have these controls off. Weight-only events are exported separately
-from fund replacement diagnostics.
+Only **Super Buffer** and **UCITS Conservative** appear in the preset selector.
+**Turnover & weight controls** contains minimum score improvement, maximum
+replacements, turnover budget and optional equal-weight drift bands. Components
+of the ECR score are organized into economic signals, integrity gates and period
+position. The single-run and batch scripts in [the conservative research guide](conservative-research.md)
+provide the broader scenario grid without expanding the UI dropdown. Weight-only
+events are exported separately from fund replacement diagnostics.
 
 ## Universe catalogue and shared-drive archives
 

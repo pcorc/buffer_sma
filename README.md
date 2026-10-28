@@ -67,8 +67,8 @@ review and the workbook's named-cohort initial-entry option.
 ECR trigger choices are **1, 1.5, 2**. Component floors are fractions of ideal
 fresh score **1.00**, e.g. **0.80**; thresholds above 1 would not describe component
 deterioration. The UI uses strict `<`. The multiplicative ECR formula and both
-client presets are retained. Advanced sections expose execution/costs, holding
-and eligibility limits, candidate auditing and formula parameters.
+client presets are retained. Advanced sections expose execution/costs, outcome-day eligibility, candidate
+auditing and formula parameters grouped into three component tabs.
 
 See [the app guide](documents/backtest-studio.md) for assumptions, downloads,
 validation, and suggested next improvements.
@@ -256,25 +256,27 @@ research defaults (including `<=`), rather than either named client preset.
 
 ## Conservative scenario library and turnover controls
 
-The app's preset selector includes 34 UCITS research variants for 3- and 5-fund
-portfolios, plus the existing clients. Use **Turnover & weight controls** to set
-review confirmation, a minimum score improvement, a replacement entry margin,
-repurchase cooldown, replacement count, turnover budget and optional weight bands.
-All default to preserving the original behavior. Weight bands trigger a reset
-around 1/N at scheduled reviews, subject to the shared turnover budget; they are
-not hard daily weight caps. Excel includes the executed-trade and weight-review
-ledgers, including deferred actions.
+The UI has two client presets. **Turnover & weight controls** offers minimum
+score improvement, replacement count, turnover budget and optional weight bands.
+Weight bands trigger a reset around 1/N at scheduled reviews, subject to the
+shared turnover budget; they are not hard daily weight caps.
 
-Run all 35 comparisons (including the single-ticker reference) with:
+Inspect one conservative run, then run the full 85-configuration comparison:
 
-```bash
-python scripts/run_conservative_suite.py
+```powershell
+.\.venv\Scripts\python.exe scripts/run_conservative_iteration.py
+.\.venv\Scripts\python.exe scripts/run_conservative_suite.py
 ```
 
-See [conservative research](documents/conservative-research.md) for every preset,
-exact accounting, CLI examples, quarterly-outcome scoring proposals and tradeoffs.
-The supplied dataset still represents annual F-series outcome structures; a
-quarterly review cadence does not change their outcome horizon.
+Both scripts save Excel tables and PNG/HTML charts to unique folders under the
+shared G-drive results archive. The batch adds `index.html`, `comparison.xlsx`,
+per-launch performance/drawdown comparisons, and a complete report for every case.
+Use `--list` on the suite to preview its grid or `--filter "Buffer < 0.8" --limit 3
+--cohorts JAN` for a small batch. Customize `config/conservative-grid.json` to
+change universe filters, N, trigger floors, cadences and turnover profiles.
+See [conservative research](documents/conservative-research.md) for the exact
+commands, default matrix, output guide and validation workflow. Only annual
+F-series histories are currently loaded.
 
 ## Universe filters, trading defaults and automatic archives
 
@@ -286,10 +288,8 @@ buffer category, then edit the exact ticker list. Only that list can be bought.
 Annual and quarterly groups remain separate; quarterly timing proposes 45/18.75
 days while keeping reset sigmas 0.07/0.05. These are editable research defaults.
 
-The saved client presets now default to **zero trading costs**, **zero minimum
-holding days**, and **next-close execution**. Named research variants explicitly
-studying a holding delay retain that delay. The conservative suite defaults to
-zero costs too; pass `--cost-bps 5` to reproduce the prior cost assumption.
+The saved client presets and new research scripts use **zero trading costs** and
+**next-close execution**. Pass `--cost-bps 5` for a transaction-cost sensitivity.
 
 By default, each successful app run automatically creates a unique dated folder
 under `G:\Shared drives\Portfolio Management\Funds\Archive\Model Portfolio Allocation\ECR Backtest Results`.

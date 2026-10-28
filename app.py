@@ -7,7 +7,6 @@ import pandas as pd
 import streamlit as st
 
 from backtesting.engine import simulate
-from backtesting.scenarios import conservative_suite
 from core.universe import GROUPS, STRATEGIES, BUFFER_BANDS, filter_catalog, validate_universe
 from studio.archive import DEFAULT_ARCHIVE_ROOT, save_archive
 from config.settings import BacktestConfig, MONTHS, ScoreConfig
@@ -64,24 +63,19 @@ def apply_universe_group():
     apply_outcome_profile()
 
 
-RESEARCH_PRESETS = {e.name: e for e in conservative_suite() if e.name.startswith('UCITS')}
+CLIENT_PRESETS = ['Super Buffer', 'UCITS Conservative']
 
 
 def apply_preset():
-    if st.session_state.preset in RESEARCH_PRESETS:
-        experiment = RESEARCH_PRESETS[st.session_state.preset]
-        score, config = experiment.score, experiment.backtest
-    else:
-        filename = {'Super Buffer': 'super-buffer.json', 'UCITS Conservative': 'ucit-conservative.json'}[st.session_state.preset]
-        score, config = load_preset(filename)
-    values = {'client': st.session_state.preset if st.session_state.preset in RESEARCH_PRESETS else config.client_name, 'structure': 'Single ticker' if config.portfolio_size == 1 else 'Fund of funds',
+    filename = {'Super Buffer': 'super-buffer.json', 'UCITS Conservative': 'ucit-conservative.json'}[st.session_state.preset]
+    score, config = load_preset(filename)
+    values = {'client': config.client_name, 'structure': 'Single ticker' if config.portfolio_size == 1 else 'Fund of funds',
               'fund_count': max(2, config.portfolio_size), 'cadence': config.review,
               'selection': config.selection, 'trigger_metric': 'ecr' if config.trigger == 'ecr' else config.buffer_metric,
               'ecr_threshold': config.threshold, 'component_threshold': config.metric_floor,
-              'lag': config.execution_lag, 'cost': float(config.cost_bps), 'holding_days': config.min_holding_days,
+              'lag': config.execution_lag, 'cost': float(config.cost_bps),
               'remaining_days': config.min_remaining_days, 'audit': config.candidate_audit,
-              'confirmations': config.confirmation_reviews, 'score_gap': float(config.min_selection_improvement),
-              'entry_margin': float(config.entry_metric_margin), 'cooldown': config.reentry_cooldown_days,
+              'score_gap': float(config.min_selection_improvement),
               'replacement_limit': config.max_replacements_per_review, 'turnover_budget': float(config.max_turnover_per_review*100),
               'use_bands': config.weight_band is not None, 'band_pp': float((config.weight_band if config.weight_band is not None else .05)*100)}
     values.update({'score_'+k: float(v) for k,v in asdict(score).items()})
@@ -90,12 +84,12 @@ def apply_preset():
         apply_outcome_profile()
 
 
-if 'preset' not in st.session_state:
+if st.session_state.get('preset') not in CLIENT_PRESETS:
     st.session_state.preset = 'Super Buffer'
     apply_preset()
 
 # Preserve neutral defaults when an already-open app reloads this version.
-for key, value in {'confirmations': 1, 'score_gap': 0., 'entry_margin': 0., 'cooldown': 0,
+for key, value in {'score_gap': 0.,
                    'replacement_limit': 0, 'turnover_budget': 100., 'use_bands': False, 'band_pp': 5.}.items():
     st.session_state.setdefault(key, value)
 
@@ -113,8 +107,8 @@ view = st.segmented_control('Workspace', ['Configure', 'Results'], key='view', l
 
 # Preserve configuration widget values when navigating to the results page.
 CONFIG_KEYS = ['preset', 'client', 'structure', 'fund_count', 'cadence', 'selection', 'trigger_metric',
-               'ecr_threshold', 'component_threshold', 'lag', 'cost', 'holding_days', 'remaining_days',
-               'audit', 'start', 'end', 'cohorts', 'confirmations', 'score_gap', 'entry_margin', 'cooldown',
+               'ecr_threshold', 'component_threshold', 'lag', 'cost', 'remaining_days',
+               'audit', 'start', 'end', 'cohorts', 'score_gap',
                'replacement_limit', 'turnover_budget', 'use_bands', 'band_pp', 'universe_group', 'universe_outcome',
                'fund_series', 'fund_strategies', 'fund_references', 'fund_months', 'buffer_band', 'selected_tickers',
                'archive_root', 'archive_enabled'] + ['score_'+k for k in asdict(ScoreConfig())]
@@ -172,7 +166,7 @@ if view == 'Results':
         if decisions.empty:
             st.info('No scheduled review occurred in this window.')
         else:
-            st.dataframe(decisions.loc[decisions.Cohort == cohort], hide_index=True, width='stretch')
+            st.dataframe(decisions.loc[decisions.Cohort == cohort].drop(columns=['Confirmation Reviews'], errors='ignore'), hide_index=True, width='stretch')
     if 'trades' in result:
         with st.expander('Executed trades & weight reviews'):
             st.dataframe(result['trades'], hide_index=True, width='stretch')
@@ -190,15 +184,11 @@ if view == 'Results':
     c.download_button('↓ Configuration', downloads['config'], file_name=stem+'.json', mime='application/json', width='stretch')
     st.stop()
 
-st.caption('Follow the numbered cards. All key choices stay visible as you build your strategy.')
-preset_col, name_col = st.columns([1, 2])
-with preset_col:
-    st.selectbox('Start from a client preset', ['Super Buffer', 'UCITS Conservative', *RESEARCH_PRESETS], key='preset', on_change=apply_preset)
-with name_col:
-    st.text_input('Run name', key='client', max_chars=100)
+st.caption('Start with the fund universe, then follow the numbered strategy cards.')
 
 with st.container(border=True):
-    st.markdown('<div class="step">FUND UNIVERSE</div>', unsafe_allow_html=True)
+    st.subheader('Fund universe')
+    st.caption('1 · Choose a fund group and outcome period.  2 · Narrow the filters.  3 · Confirm the funds included.')
     a, b = st.columns(2)
     a.selectbox('Fund group', GROUPS, key='universe_group', on_change=apply_universe_group)
     outcome = b.selectbox('Outcome period', ['Annual','Quarterly'], key='universe_outcome', on_change=apply_outcome_profile)
@@ -228,7 +218,18 @@ with st.container(border=True):
     else:
         st.caption(f'{len(selected_tickers)} funds selected. Initial purchases and replacements are both restricted to this list.')
     with st.expander('View matching fund details'):
-        st.dataframe(matches, hide_index=True, width='stretch')
+        details = matches.rename(columns={'history_available': 'History available'}).copy()
+        details = details[['ticker', 'History available', *[c for c in details if c not in ('ticker', 'History available')]]]
+        details['History available'] = details['History available'].map({True: '✓ Available', False: '— Not loaded'})
+        styled = details.style.map(lambda v: 'color: #1672C4; font-weight: 700' if v == '✓ Available' else 'color: #687783', subset=['History available'])
+        st.dataframe(styled, hide_index=True, width='stretch')
+
+with st.container(border=True):
+    st.subheader('Client configuration')
+    preset_col, name_col = st.columns([1, 2])
+    preset_col.selectbox('Start from a client preset', CLIENT_PRESETS, key='preset', on_change=apply_preset)
+    name_col.text_input('Run name', key='client', max_chars=100)
+    st.caption('Two starting points. Customize the rules below; use the research scripts for batch comparisons.')
 
 main, summary = st.columns([2.7, 1], gap='large')
 with main:
@@ -301,58 +302,66 @@ with main:
         a, b = st.columns(2)
         lag = a.selectbox('When to execute a signaled trade', [1, 0], format_func=lambda v: 'Following trading day’s close (default)' if v else 'Signal day’s close (theoretical comparison)', key='lag')
         cost = b.number_input('Trading cost (basis points)', min_value=0.0, max_value=9999.0, step=1.0, key='cost', help='0 means no transaction cost. 5 bps = 0.05%, or $5 per $10,000 of one-way traded capital. Charged on replacements and weight adjustments; initial entry is uncharged.')
-        hold = a.number_input('Minimum trading days before replacement', min_value=0, max_value=2520, step=1, key='holding_days', help='0 adds no holding restriction. A positive number prevents replacement until that many observed trading sessions after purchase; it does not delay weight-only adjustments.')
         remaining = b.number_input('Minimum outcome days remaining', min_value=0, max_value=366, step=1, key='remaining_days')
         audit = st.checkbox('Include full candidate rankings in Excel', key='audit')
-        st.caption('Costs and minimum holding days are implemented in the engine. Both default to zero in the client presets. Named holding-period experiments deliberately specify a nonzero delay.')
     with st.expander('Turnover & weight controls', expanded=False):
-        st.caption('Optional controls slow replacements. Defaults preserve the original strategy. Budgets and confirmation can delay exits from deteriorating holdings.')
+        st.caption('Optional controls slow replacements. Defaults preserve the original strategy. Replacement budgets can defer trades.')
         a, b = st.columns(2)
-        confirmations = a.number_input('Consecutive breached reviews', min_value=1, max_value=12, step=1, key='confirmations',
-                                        help='At monthly cadence, 2 requires breaches on two consecutive monthly reviews. Recovery resets the count.')
-        score_gap = b.number_input('Minimum selection-score improvement', min_value=0., step=.05, key='score_gap',
+        score_gap = a.number_input('Minimum selection-score improvement', min_value=0., step=.05, key='score_gap',
                                    help='Require the replacement to improve on the held score by this many points. Measured in the chosen selection metric.')
-        entry_margin = a.number_input('Replacement entry margin', min_value=0., max_value=1., step=.05, key='entry_margin', disabled=metric=='ecr',
-                                       help='For component triggers only: floor 0.80 plus margin 0.10 requires a replacement component score of at least 0.90. Zero disables this filter.')
-        cooldown = b.number_input('Repurchase cooldown (sessions)', min_value=0, max_value=2520, step=1, key='cooldown')
-        replacement_limit = a.number_input('Maximum replacements per review', min_value=0, max_value=12, step=1, key='replacement_limit',
+        replacement_limit = b.number_input('Maximum replacements per review', min_value=0, max_value=12, step=1, key='replacement_limit',
                                            help='Zero means unlimited. Process the worst triggered metric first.')
-        budget = b.number_input('Turnover budget per review (%)', min_value=.1, max_value=100., step=5., key='turnover_budget',
+        budget = a.number_input('Turnover budget per review (%)', min_value=.1, max_value=100., step=5., key='turnover_budget',
                                  help='One-way turnover: replaced capital / portfolio capital; weight resets add half the absolute weight change. Applies at execution too.')
         use_bands = st.checkbox('Reset equal weights only outside a drift band', key='use_bands', disabled=n==1)
         band = st.number_input('Weight band around 1/N (percentage points)', min_value=0., max_value=100., step=1., key='band_pp', disabled=n==1 or not use_bands)
         if n>1 and use_bands:
             st.caption(f'Target {1/n:.1%}; review band {max(0,1/n-band/100):.1%}–{min(1,1/n+band/100):.1%}. A breach requests a full equal-weight reset at the configured execution time, subject to remaining turnover budget.')
-        st.caption('Minimum holding days are set under Trading assumptions & fund eligibility. Replacement controls do not suppress the separate weight-band policy. A band is a review trigger, not a continuously enforced weight cap.')
         if budget/100 < 1/n:
             st.warning('This budget is below an initially equal-sized holding. Whole-holding replacements can be deferred until their weight fits the budget.')
     with st.expander('ECR formula · components & outcome period', expanded=False):
         st.subheader('Components of the ECR score')
         st.caption('Economics drive the score; buffer and cap integrity act as multiplicative gates. Period position adds a small timing bonus. The default coefficients have an intended maximum of 3.0.')
-        annual_tab, quarterly_tab = st.tabs(['Annual outcome products','Quarterly outcome products'])
-        with annual_tab:
-            st.write('Annual settings: period-position peak at 180 days, width 75 days. Reset tolerance is 0.07 on the downside and 0.05 on the upside.')
-        with quarterly_tab:
-            st.write('Quarterly proposal: peak at 45 days, width 18.75 days. Keep reset tolerance at 0.07 / 0.05. This preserves the relative timing curve under a 360/90-day convention; it is not yet calibrated to quarterly fund history.')
-            st.caption('Quarterly products and quarterly review cadence are different. Changing review cadence does not change fund outcome length. Quarterly groups stay unavailable until their own history is supplied.')
-        st.info(f'Active outcome profile: {outcome}. Selecting an outcome period above sets its timing defaults. The editable values below are the actual parameters used.')
-        st.code('(w_DBB × DBB + w_Reset × Reset) × max(0, Buffer)^γB × max(0, Cap)^γC + bonus × Period', language=None)
-        groups = [
-            ('1. Downside Before Buffer', 'Measures unprotected loss exposure before the buffer starts absorbing losses.', [('dbb_weight','DBB coefficient'),('dbb_decay','DBB sensitivity')]),
-            ('2. Par / Reset Proximity', 'Rewards a reference asset near its reset level. Larger sigma gives more tolerance to drift.', [('reset_weight','Reset coefficient'),('sigma_down','Downside reset tolerance'),('sigma_up','Upside reset tolerance')]),
-            ('3. Buffer Integrity', 'Measures how much of the original net buffer remains. A larger exponent applies a stronger penalty below 1.', [('buffer_exponent','Buffer gate exponent')]),
-            ('4. Cap Integrity', 'Measures the remaining net cap relative to the original cap. It gates the economic portion of ECR.', [('cap_exponent','Cap gate exponent')]),
-            ('5. Outcome-Period Position', 'Rewards the middle of the outcome period using days remaining. Its bonus is additive.', [('period_bonus','Period-position bonus'),('period_center','Peak days remaining'),('period_width','Timing width (days)')]),
-        ]
+        st.latex(r'\mathrm{ECR} = (w_D \cdot D + w_R \cdot R) \cdot \max(0,B)^{\gamma_B} \cdot \max(0,C)^{\gamma_C} + b_P \cdot P')
+        economics, integrity, timing = st.tabs(['1 · Economic signals', '2 · Integrity gates', '3 · Period position'])
         score_options = {}
-        for title, description, fields in groups:
-            with st.container(border=True):
-                st.subheader(title)
-                st.caption(description)
-                columns = st.columns(len(fields))
-                for column,(key,label) in zip(columns,fields):
-                    score_options[key] = column.number_input(label, min_value=.001 if key in ('sigma_down','sigma_up','period_width') else 0.,
-                                                             step=.01 if 'sigma' in key else .1, format='%.3f', key='score_'+key)
+
+        def score_field(column, key, label, step=.1):
+            score_options[key] = column.number_input(label, min_value=.001 if key in ('sigma_down','sigma_up','period_width') else 0.,
+                                                      step=step, format='%.3f', key='score_'+key)
+
+        with economics:
+            a, b = st.columns(2)
+            with a, st.container(border=True):
+                st.subheader('D · Downside Before Buffer')
+                st.caption('Scores the loss exposure before protection begins. The coefficient sets its contribution to ECR.')
+                score_field(st, 'dbb_weight', 'DBB coefficient')
+                score_field(st, 'dbb_decay', 'DBB sensitivity')
+            with b, st.container(border=True):
+                st.subheader('R · Reset proximity')
+                st.caption('Rewards proximity to the reset level. Larger tolerance gives credit to funds further from par.')
+                score_field(st, 'reset_weight', 'Reset coefficient')
+                left, right = st.columns(2)
+                score_field(left, 'sigma_down', 'Downside tolerance', .01)
+                score_field(right, 'sigma_up', 'Upside tolerance', .01)
+        with integrity:
+            a, b = st.columns(2)
+            for column, symbol, title, key in [(a, 'B', 'Buffer Integrity', 'buffer_exponent'), (b, 'C', 'Cap Integrity', 'cap_exponent')]:
+                with column, st.container(border=True):
+                    st.subheader(f'{symbol} · {title}')
+                    st.caption('Fraction of the original protection remaining.' if symbol == 'B' else 'Fraction of the original upside cap remaining.')
+                    score_field(st, key, f'{title} exponent')
+            st.caption('Both gates multiply the economic signals. A larger exponent penalizes deterioration more strongly.')
+        with timing:
+            st.subheader('P · Outcome-period position')
+            st.caption('A small additive bonus centered within the outcome period. These values describe the product, independently of the review cadence.')
+            st.table(pd.DataFrame({'Outcome profile': ['Annual', 'Quarterly'], 'Peak days remaining': [180.,45.], 'Timing width (days)': [75.,18.75], 'Reset tolerance (down / up)': ['0.07 / 0.05','0.07 / 0.05']}))
+            st.caption('Quarterly timing is a proportional research setting; it still needs quarterly fund history for evaluation.')
+            st.info(f'Active profile: {outcome}. Changing the universe outcome period restores its timing defaults.')
+            a, b, c = st.columns(3)
+            score_field(a, 'period_bonus', 'Period-position bonus')
+            score_field(b, 'period_center', 'Peak days remaining')
+            score_field(c, 'period_width', 'Timing width (days)')
 
 error = None
 try:
@@ -367,10 +376,9 @@ try:
                             buffer_metric='buffer_integrity' if metric == 'ecr' else metric,
                             threshold=threshold if metric == 'ecr' else 1.5,
                             metric_floor=threshold if metric != 'ecr' else .8, comparator='<',
-                            execution_lag=lag, cost_bps=cost, min_holding_days=hold, min_remaining_days=remaining,
+                            execution_lag=lag, cost_bps=cost, min_remaining_days=remaining,
                             candidate_audit=audit, start_date=start.isoformat(), end_date=end.isoformat(), cohorts=tuple(cohorts),
-                            confirmation_reviews=confirmations, min_selection_improvement=score_gap,
-                            entry_metric_margin=entry_margin if metric != 'ecr' else 0., reentry_cooldown_days=cooldown,
+                            min_selection_improvement=score_gap,
                             max_replacements_per_review=replacement_limit, max_turnover_per_review=budget/100,
                             weight_band=band/100 if n>1 and use_bands else None)
     validate_window(default_data, config)
