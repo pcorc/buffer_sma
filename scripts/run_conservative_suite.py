@@ -15,10 +15,10 @@ from studio.archive import new_archive_path
 from visualization.conservative_comparison import export_batch_comparison
 
 
-def main(argv=None):
+def main(argv=None, *, default_grid=DEFAULT_GRID):
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_arguments(parser, cohorts=MONTHS)
-    parser.add_argument('--grid', type=Path, default=DEFAULT_GRID, help='JSON containing universe filters and the scenario grid.')
+    parser.add_argument('--grid', type=Path, default=default_grid, help='JSON containing universe filters and the scenario grid.')
     parser.add_argument('--filter', default='', help='Case-insensitive substring in scenario names, e.g. N=3 or DBB.')
     parser.add_argument('--list', action='store_true', help='Validate and print the selected configurations without running or writing results.')
     parser.add_argument('--limit', type=int, help='Run only the first N matching cases, for a small inspection batch.')

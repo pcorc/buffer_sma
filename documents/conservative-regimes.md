@@ -17,6 +17,47 @@ The grid varies only portfolio size (3/5) and trigger (ECR 1.5, Buffer Integrity
 always highest multiplicative ECR. Initial weights are equal and then drift;
 only breached positions are reconsidered. There are no extra replacement limits.
 
+## Lower threshold comparison
+
+To add 30%, 50% and 60% score floors while keeping all the simple cases:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/run_conservative_thresholds.py
+```
+
+This runs **27 configurations**, each across the same twelve 2021 launch months:
+
+| Portfolio size | Trigger floors (strictly below) | Selection / review |
+| --- | --- | --- |
+| 3 and 5 funds | Buffer Integrity: 0.30, 0.50, 0.60, 0.70, 0.80, 0.90 | Highest ECR / monthly |
+| 3 and 5 funds | DBB score: 0.30, 0.50, 0.60, 0.80, 0.90, 0.95 | Highest ECR / monthly |
+| 3 and 5 funds | ECR: 1.50 | Highest ECR / monthly |
+| 1 fund (Super Buffer reference) | ECR: 1.50 | Highest ECR / monthly |
+
+All use the original multiplicative ECR, next-close execution and zero costs.
+Extra turnover controls are disabled. A lower floor permits **more** deterioration
+before a review triggers a replacement search. A 0.30 floor means below 30% of
+the ideal 1.00 score (70% deterioration), not a 30% decline from purchase.
+Buffer Integrity measures the remaining fraction of the original buffer; DBB is
+a nonlinear score, not a percentage of protection. With the current DBB formula
+`exp(5 * downside_before_buffer_net)`, scores 0.30/0.50/0.60 correspond to inputs
+of approximately -24.1%/-13.9%/-10.2%. These are permissive exits and may rarely
+trigger. They are turnover-versus-drawdown experiments, not inherently safer rules.
+
+Each run creates a new folder in the configured G-drive archive with
+`comparison.xlsx`, CSV tables, individual run workbooks/configurations and three
+top-five chart pairs (return, drawdown, Sharpe). Each chart identifies its parameter
+sets. No individual-run charts are generated. Use `--plots none` to skip all
+plotting, `--list` to preview the cases, or `--cohorts JAN` for a smaller first run.
+`--start-date`, `--end-date` and `--archive-root` work as on the regular suite.
+The grid is saved in `config/conservative-thresholds.json`.
+
+Compare matched launch dates and stress windows before choosing a floor. Pass the
+newly exported `comparison.xlsx` to the regime analysis command below; it supports
+all 27 cases, including fresh-start checks, without adding trading-rule controls.
+
+## Stress-window reports
+
 To study a saved comparison without rerunning its backtests:
 
 ```powershell

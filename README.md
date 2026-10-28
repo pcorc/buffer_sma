@@ -267,6 +267,20 @@ comparison on identical stress-period dates and optionally rerun fresh entries:
 See [regime analysis](documents/conservative-regimes.md) for the evaluation dates,
 carry-in versus fresh-entry distinction, data coverage and saved reports.
 
+To compare lower **30%, 50% and 60%** Buffer Integrity/DBB score floors with the
+simple baseline cases (27 configurations, highest-ECR selection, monthly reviews):
+
+```powershell
+.\.venv\Scripts\python.exe scripts/run_conservative_thresholds.py
+```
+
+This saves Excel/CSV comparisons and only three top-five chart pairs to a new
+folder in the shared G-drive archive. Add `--plots none` to skip charts or
+`--cohorts JAN` for a smaller run. Lower floors permit more deterioration before
+trading; evaluate drawdowns alongside turnover. See the [threshold comparison
+guide](documents/conservative-regimes.md#lower-threshold-comparison) for the full grid
+and matched stress-window analysis.
+
 For a single **Super Buffer** inspection run:
 
 ```powershell
