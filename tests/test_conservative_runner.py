@@ -12,7 +12,7 @@ from backtesting.conservative_runner import (DEFAULT_GRID, base_config, grid_cas
                                              preflight_cases, research_session, resolve_universe)
 from config.settings import ScoreConfig
 from core.universe import load_catalog
-from visualization.conservative_comparison import export_batch_comparison
+from visualization.conservative_comparison import export_batch_comparison, top_five_tables
 
 
 class ConservativeRunnerTests(unittest.TestCase):
@@ -73,6 +73,7 @@ class ConservativeRunnerTests(unittest.TestCase):
             folders = {name:output/'runs'/str(i) for i,name in enumerate(results)}
             table = export_batch_comparison(results,cases,folders,output)
             self.assertEqual(len(table),2)
+            self.assertEqual(set(table['Configuration ID']), {'C001', 'C002'})
             book = pd.ExcelFile(output/'comparison.xlsx')
             self.assertTrue({'Comparison','Configurations','Launch Cohorts','NAV Jan'}.issubset(book.sheet_names))
             nav = pd.read_excel(book,sheet_name='NAV Jan',index_col=0)
@@ -80,9 +81,48 @@ class ConservativeRunnerTests(unittest.TestCase):
                 self.assertAlmostEqual(nav[name].iloc[-1],result['daily']['Strategy NAV'].iloc[-1],places=11)
             book.close()
             self.assertTrue((output/'index.html').exists())
-            self.assertTrue((output/'charts/jan-shortlist.png').exists())
-            self.assertTrue((output/'charts/jan-comparison.html').exists())
-            self.assertTrue((output/'charts/risk-return.png').exists())
+            self.assertEqual(len(list((output/'charts').glob('*.png'))),3)
+            self.assertEqual(len(list((output/'charts').glob('*.html'))),3)
+            self.assertTrue((output/'charts/top5-sharpe.html').exists())
+            self.assertIn('Parameter sets', (output/'charts/top5-drawdown.html').read_text())
+            self.assertTrue((output/'top_five.csv').exists())
+
+    def test_top_five_metrics_rank_independently_and_exclude_undefined_values(self):
+        import numpy as np
+        table = pd.DataFrame({'Mean Total Return':[.1,.2,.3,.4,.5,.6,.7],
+                              'Worst Drawdown':[-.01,-.2,-.3,-.4,-.5,-.6,-.7],
+                              'Mean Sharpe':[2.,2.,np.nan,np.inf,1.,.5,-.1]},index=list('ABCDEFG'))
+        ranked = top_five_tables(table)
+        self.assertEqual(ranked['total-return'].index.tolist(),list('GFEDC'))
+        self.assertEqual(ranked['drawdown'].index.tolist(),list('ABCDE'))
+        self.assertEqual(ranked['sharpe'].index.tolist(),list('ABEFG'))
+
+    def test_no_plots_preserves_excel_and_rankings_without_calling_renderers(self):
+        from io import BytesIO
+        from zipfile import ZipFile
+        from studio.service import build_downloads
+        case = make_case('No plots',{},self.catalogue,self.available,self.base)
+        result = self.session.run(case.experiment.score,case.experiment.backtest)
+        with patch('visualization.performance_plots.plot_results') as overview, \
+             patch('visualization.performance_plots.plot_studio_results') as reports, \
+             patch('visualization.research_plots.dashboard') as interactive:
+            downloads = build_downloads(result,plots=False)
+            overview.assert_not_called(); reports.assert_not_called(); interactive.assert_not_called()
+        with ZipFile(BytesIO(downloads['zip'])) as archive:
+            self.assertIn('ecr_results.xlsx',archive.namelist())
+            self.assertFalse(any(n.startswith('charts/') or n.endswith(('.png','.html','.js')) for n in archive.namelist()))
+            self.assertFalse(json.loads(archive.read('manifest.json'))['plots_included'])
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp)
+            with patch('visualization.conservative_comparison.render_top_five') as renderer:
+                export_batch_comparison({'No plots':result},[case],{'No plots':output/'runs/001'},output,plots='none')
+                renderer.assert_not_called()
+            self.assertFalse((output/'charts').exists())
+            self.assertTrue((output/'comparison.xlsx').exists())
+            self.assertTrue((output/'top_five.csv').exists())
+            html = (output/'index.html').read_text()
+            self.assertIn('All plotting was disabled',html)
+            self.assertNotIn('href="charts/',html)
 
     def test_batch_failure_records_partial_state_without_complete_marker(self):
         from scripts.run_conservative_suite import main

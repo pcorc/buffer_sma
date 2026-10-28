@@ -83,9 +83,8 @@ def validate_window(data, config):
         review_dates(data.dates, data.cycles, start, stop, config.review)
 
 
-def build_downloads(result):
+def build_downloads(result, *, plots=True):
     """Build artifacts in an isolated temporary directory; return immutable bytes."""
-    from visualization.research_plots import dashboard, holdings_figure
     score = ScoreConfig(**result['parameters']['score'])
     config = BacktestConfig(**result['parameters']['backtest'])
     try:
@@ -99,22 +98,27 @@ def build_downloads(result):
                 'execution': 'Next observed close' if config.execution_lag else 'Theoretical same close',
                 'review_calendar': SCHEDULE_NOTES.get(config.review, 'Every observed session'),
                 'timings': result.get('timings', {}),
-                'requested_archive_root': result.get('requested_archive_root')}
+                'requested_archive_root': result.get('requested_archive_root'),
+                'plots_included': plots}
     with TemporaryDirectory(prefix='ecr-studio-') as temp:
         output = Path(temp) / 'report'
-        export_results(result, output, manifest)
+        export_results(result, output, manifest, plots=plots)
         (output / 'config.json').write_text(config_json(score, config))
-        charts = output / 'charts'
-        charts.mkdir()
-        from visualization.performance_plots import plot_studio_results
-        plot_studio_results(result, charts)
-        for cohort in result['summary'].Cohort:
-            dashboard(result, cohort).write_html(charts / f'{cohort.lower()}-performance.html', include_plotlyjs='directory')
-            holdings_figure(result, cohort).write_html(charts / f'{cohort.lower()}-holdings.html', include_plotlyjs='directory')
+        if plots:
+            from visualization.research_plots import dashboard, holdings_figure
+            from visualization.performance_plots import plot_studio_results
+            charts = output / 'charts'
+            charts.mkdir()
+            plot_studio_results(result, charts)
+            for cohort in result['summary'].Cohort:
+                dashboard(result, cohort).write_html(charts / f'{cohort.lower()}-performance.html', include_plotlyjs='directory')
+                holdings_figure(result, cohort).write_html(charts / f'{cohort.lower()}-holdings.html', include_plotlyjs='directory')
+        chart_note = ('charts/: PNG reports and interactive HTML charts. Extract the whole ZIP before opening HTML.\n'
+                      if plots else 'Individual charts are disabled for this batch report. See the batch index for any comparison charts.\n')
         (output / 'README.txt').write_text(
             'ECR Backtest Studio\n\n'
             'ecr_results.xlsx: summary, daily NAV, holdings, decisions, candidates and diagnostics.\n'
-            'charts/: PNG reports and interactive HTML charts. Extract the whole ZIP before opening HTML.\n'
+            + chart_note +
             'manifest.json: exact parameters, source hashes, code version and execution assumptions.\n'
             'config.json: replay with python main.py --config /path/to/config.json\n\n'
             'Review cadence checks the trigger; trades are conditional. Only breached sleeves are replaced.\n'

@@ -185,13 +185,13 @@ def ensure_archive_root(root):
     return path
 
 
-def run_and_archive(session, case, archive_root, catalogue, folder_name=None):
+def run_and_archive(session, case, archive_root, catalogue, folder_name=None, *, plots=True):
     e = case.experiment
     began = time.perf_counter()
     result = session.run(e.score, e.backtest)
     result['universe'] = catalogue.loc[catalogue.ticker.isin(e.backtest.universe)].copy()
     result['requested_archive_root'] = str(archive_root)
     result['sources'] = {**result['sources'], 'universe_filters': case.filters}
-    folder = save_archive(build_downloads(result), archive_root, e.name, result['strategy_id'], folder_name=folder_name)
+    folder = save_archive(build_downloads(result, plots=plots), archive_root, e.name, result['strategy_id'], folder_name=folder_name)
     print(f'  Saved ({time.perf_counter()-began:.1f}s): {folder}', flush=True)
     return result, folder

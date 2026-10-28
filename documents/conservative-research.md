@@ -77,13 +77,24 @@ The limited-turnover profile combines ECR improvement ≥0.10, at most one
 replacement per review, a 40% turnover budget for N=3 or 25% for N=5, and a ±5pp
 weight band. The matrix is 2 sizes × 2 cadences × 7 triggers × 3 profiles = 84,
 plus one single-ticker reference. All twelve launch months are separate tests
-by default. The full run writes **1,020 cohort reports** and can take several
-minutes or longer depending on Excel/chart generation and shared-drive speed.
-The script prints progress and saves each completed iteration immediately.
-Scored data are cached across cases; full ledgers are released from memory after
-saving. Candidate rankings are included in the single inspection run; the batch
-omits the full candidate audit to reduce output size, retaining decisions,
-positions, diagnostics and trades.
+by default. Individual iteration plots are **disabled** in the suite. It saves
+all 85 Excel/CSV reports, then makes only **three comparison PNGs and three
+interactive HTML charts** for the top five by total return, maximum drawdown
+and Sharpe. Scored data are cached across cases; full ledgers are released from
+memory after saving. Excel generation and shared-drive writes still take time.
+Candidate rankings are included in the single inspection run; the batch omits
+the full candidate audit, retaining decisions, positions, diagnostics and trades.
+
+To skip plotting entirely while retaining every table and the top-five rankings:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/run_conservative_suite.py --plots none
+```
+
+The default is `--plots top5`. Single-run scripts and the dashboard continue to
+produce their detailed charts. `--chart-cohort APR` chooses April for the three
+static PNGs (April must be in `--cohorts`); otherwise they show the first requested
+launch. Interactive charts switch among all requested launches.
 
 For a small comparison or an evaluation period:
 
@@ -104,14 +115,18 @@ Start with **index.html**, which links all charts and individual reports.
 - **comparison.xlsx:** sortable scenario metrics, launch-cohort results, exact
   configuration dimensions, and a daily NAV sheet per launch month with every
   iteration side by side. Returns/drawdowns are numeric percentage cells.
-- **charts/*-comparison.html:** performance and drawdown for every iteration in
-  that launch. The dropdown shows the downside shortlist, all scenarios or a
-  portfolio size; the legend toggles individual configurations.
-- **charts/*-shortlist.png:** readable static panels by portfolio size, showing
-  up to six configurations selected by worst-cohort drawdown, with SPY/BUFR.
-- **charts/risk-return.html / .png:** all scenarios' return, downside and turnover
-  trade-offs. Hover in the HTML for the configuration and statistics.
-- **runs/:** full individual Excel/CSV/PNG/HTML/ZIP packages and replay configs.
+- **Top Five sheet / top_five.csv:** three independent lists of up to five
+  configurations. Total return uses mean cumulative return across launch tests;
+  drawdown favors the least severe worst-cohort maximum drawdown (closest to
+  zero); Sharpe uses the mean across launches. Nonfinite scores are excluded;
+  ties use the experiment name for deterministic results.
+- **charts/top5-total-return, top5-drawdown, top5-sharpe (.html / .png):** each
+  overlays the selected five portfolios' growth of 100 and drawdown. The table
+  inside each chart matches line IDs to N, trigger/threshold, review cadence,
+  ECR improvement, maximum replacements, turnover budget, weight band and universe.
+  The ranking uses all launch tests even when the visible curve is one launch.
+  With fewer eligible configurations, only the available rows are shown.
+- **runs/:** individual Excel/CSV/ZIP packages and replay configs, without plots.
 - **grid.json / plan.json:** the requested grid and exact expanded configurations.
 - **batch-status.json:** planned/completed runs, source hashes and completion status.
   Interrupted/failed batches retain completed individual reports; no complete

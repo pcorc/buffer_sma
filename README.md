@@ -281,9 +281,13 @@ Inspect one conservative run, then run the full 85-configuration comparison:
 .\.venv\Scripts\python.exe scripts/run_conservative_suite.py
 ```
 
-Both scripts save Excel tables and PNG/HTML charts to unique folders under the
-shared G-drive results archive. The batch adds `index.html`, `comparison.xlsx`,
-per-launch performance/drawdown comparisons, and a complete report for every case.
+Both scripts save Excel tables to unique folders under the shared G-drive
+results archive. Single runs include detailed PNG/HTML charts. The suite skips
+all per-iteration plots and creates only three top-five comparison chart pairs:
+highest mean total return, least severe worst-cohort drawdown and highest mean
+Sharpe. Each includes a parameter table matching its lines; HTML can switch launch
+months. Add `--plots none` to skip all plotting. Full comparison tables, rankings,
+`index.html`, and each configuration's data still save in either mode.
 Use `--list` on the suite to preview its grid or `--filter "Buffer < 0.8" --limit 3
 --cohorts JAN` for a small batch. Customize `config/conservative-grid.json` to
 change universe filters, N, trigger floors, cadences and turnover profiles.

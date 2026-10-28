@@ -22,6 +22,10 @@ def main(argv=None):
     parser.add_argument('--filter', default='', help='Case-insensitive substring in scenario names, e.g. N=3 or DBB.')
     parser.add_argument('--list', action='store_true', help='Validate and print the selected configurations without running or writing results.')
     parser.add_argument('--limit', type=int, help='Run only the first N matching cases, for a small inspection batch.')
+    parser.add_argument('--plots', choices=['top5', 'none'], default='top5',
+                        help='Default: three top-five comparison charts only. Use none to skip all plotting.')
+    parser.add_argument('--chart-cohort', type=str.upper, choices=MONTHS,
+                        help='Launch shown in static charts; defaults to the first requested cohort. HTML can switch launches.')
     args = parser.parse_args(argv)
     output = None
     status = None
@@ -32,6 +36,8 @@ def main(argv=None):
         catalogue = load_catalog()
         session = research_session()
         base = replace(base_config(args), candidate_audit=False)
+        if args.chart_cohort and args.chart_cohort not in base.cohorts:
+            raise ValueError('--chart-cohort must be one of the requested --cohorts.')
         cases = grid_cases(grid, catalogue, session.metrics.ticker.unique(), base)
         cases = [c for c in cases if args.filter.lower() in c.experiment.name.lower()]
         if args.limit:
@@ -44,6 +50,7 @@ def main(argv=None):
             for i,case in enumerate(cases,1):
                 print(f'{i:03d}  {case.experiment.name}')
             return
+        print('Individual charts: off. Comparison charts: ' + ('top five by return / drawdown / Sharpe.' if args.plots == 'top5' else 'off.'), flush=True)
         destination = ensure_archive_root(args.archive_root)
         output = new_archive_path(destination,'Conservative-comparison','batch')
         output.mkdir(parents=True,exist_ok=False)
@@ -52,7 +59,8 @@ def main(argv=None):
                  'backtest':asdict(c.experiment.backtest)} for c in cases]
         (output/'plan.json').write_text(json.dumps(plan,indent=2)+'\n')
         status = {'state':'running','created_utc':datetime.now(timezone.utc).isoformat(),
-                  'planned':len(cases),'completed':[],'sources':session.sources}
+                  'planned':len(cases),'completed':[],'sources':session.sources,
+                  'plots':args.plots,'individual_plots':False,'chart_cohort':args.chart_cohort or base.cohorts[0]}
 
         def write_status():
             temp = output/'batch-status.tmp'
@@ -66,7 +74,7 @@ def main(argv=None):
             name = case.experiment.name
             print(f'[{i}/{len(cases)}] {name}',flush=True)
             # Short child names keep the user's deep Windows archive below path limits.
-            result, folder = run_and_archive(session,case,output/'runs',catalogue,folder_name=f'{i:03d}')
+            result, folder = run_and_archive(session,case,output/'runs',catalogue,folder_name=f'{i:03d}',plots=False)
             # Detailed ledgers are already on disk; keep only comparison inputs in RAM.
             results[name] = {k:result[k] for k in ('summary','daily','parameters','timings','strategy_id','sources')}
             folders[name] = folder
@@ -74,7 +82,7 @@ def main(argv=None):
                                         'strategy_id':result['strategy_id']})
             write_status()
             del result
-        export_batch_comparison(results,cases,folders,output)
+        export_batch_comparison(results,cases,folders,output,plots=args.plots,chart_cohort=args.chart_cohort)
         status.update(state='complete',prepared_panels=session.score_builds,
                       completed_utc=datetime.now(timezone.utc).isoformat())
         write_status()
