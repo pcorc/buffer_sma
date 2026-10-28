@@ -256,6 +256,17 @@ research defaults (including `<=`), rather than either named client preset.
 
 ## Conservative scenario library and turnover controls
 
+For simpler monthly tests, pass `--grid config/conservative-simple.json` to the
+suite (15 configurations, no extra turnover controls). To evaluate an existing
+comparison on identical stress-period dates and optionally rerun fresh entries:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/analyze_conservative_regimes.py --workbook "C:\path\to\comparison.xlsx" --fresh-starts
+```
+
+See [regime analysis](documents/conservative-regimes.md) for the evaluation dates,
+carry-in versus fresh-entry distinction, data coverage and saved reports.
+
 For a single **Super Buffer** inspection run:
 
 ```powershell
