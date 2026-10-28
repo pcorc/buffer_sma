@@ -256,6 +256,19 @@ research defaults (including `<=`), rather than either named client preset.
 
 ## Conservative scenario library and turnover controls
 
+For a single **Super Buffer** inspection run:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/run_super_buffer.py
+```
+
+This dedicated script fixes one fund, highest-ECR selection, a strict **ECR < 1.5**
+trigger, monthly reviews and next-close execution. Defaults are a January launch,
+zero costs, and the available history starting no earlier than 2021-01-19. It saves
+Excel, CSVs, PNG/HTML charts and a ZIP in a unique folder under the shared G-drive
+results archive. Optional flags: `--start-date`, `--end-date`, `--cohorts`,
+`--cost-bps`, and `--archive-root`. The printed path identifies the completed run.
+
 The UI has two client presets. **Turnover & weight controls** offers minimum
 score improvement, replacement count, turnover budget and optional weight bands.
 Weight bands trigger a reset around 1/N at scheduled reviews, subject to the
