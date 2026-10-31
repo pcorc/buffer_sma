@@ -236,7 +236,9 @@ def _fetch_previous_period(ticker, nsid, period_start):
     for asof in candidates:
         try:
             prev = parse_period_excel(fetch_period_excel(nsid, asof_date=asof), ticker)
-        except RuntimeError:
+        except (RuntimeError, ValueError):
+            # Non-spreadsheet body (ValueError) or missing header (RuntimeError)
+            # means no period ends here — e.g. we have walked back past inception.
             continue
         if prev["Date"].min() < period_start:  # genuinely an earlier period
             return prev
