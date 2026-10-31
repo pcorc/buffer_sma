@@ -10,7 +10,7 @@ import pandas as pd
 from backtesting.regimes import REGIMES, load_export, evaluate_windows, fresh_checks, drawdown_heatmap
 from backtesting.conservative_runner import ensure_archive_root
 from backtesting.data_pipeline import file_hash
-from studio.archive import DEFAULT_ARCHIVE_ROOT, new_archive_path
+from studio.archive import default_archive_root, new_archive_path
 
 NOTES = [
     'Carry-in analysis evaluates the already-invested portfolios in the uploaded NAV sheets. It does not restart holdings at the stress boundary.',
@@ -19,7 +19,7 @@ NOTES = [
     'Regime Summary shows mean returns and the worst drawdown across original launch cohorts. Those cohorts overlap and are not independent market-regime trials.',
     'Fresh Start Results, when requested, use new highest-ECR portfolios before the stress window. They are separate tests, never pooled with carry-in results.',
     'Simple cases have no ECR improvement hurdle, no replacement-count limit, no restrictive turnover budget and no weight-band reset. Cadence defaults to monthly.',
-    'The fresh-start engine uses current repository histories, default multiplicative ECR, strict triggers, next-close execution and zero trading costs. Exact replay settings and data hashes are in fresh_runs.',
+    'The fresh-start engine uses current repository histories and default multiplicative ECR. Each configuration keeps its recorded selection, execution, cost and comparison; older workbooks default to strict triggers, next-close execution and zero costs. Exact replay settings and data hashes are in fresh_runs.',
     'The 2024 fresh start is May 20, not June 24: the current benchmark file lacks both SPY and BUFR values at the June launch. No benchmark values are invented.',
     'Fresh simulations extend beyond stress boundaries to the declared simulation end; reported stress performance stops at the exact regime end. Simulation is chronological.',
     'Sharpe reconciliation uses the engine convention of a zero risk-free rate and sqrt(252). Short stress windows are evaluated by loss and drawdown, not optimized on annualized Sharpe.',
@@ -31,7 +31,7 @@ NOTES = [
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--workbook',type=Path,required=True,help='Path to an exported comparison.xlsx with NAV launch sheets.')
-    parser.add_argument('--archive-root',default=DEFAULT_ARCHIVE_ROOT)
+    parser.add_argument('--archive-root',default=default_archive_root())
     parser.add_argument('--review',choices=['monthly','quarterly','all'],default='monthly')
     parser.add_argument('--fresh-starts',action='store_true',help='Also simulate fresh portfolios before four stress periods using repository data.')
     parser.add_argument('--no-plots',action='store_true',help='Omit the one or two drawdown heatmaps.')

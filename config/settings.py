@@ -58,6 +58,9 @@ class BacktestConfig:
     max_replacements_per_review: int = 0
     max_turnover_per_review: float = 1.0
     weight_band: float | None = None
+    # Buy-and-hold comparison: 'initial_selection' (the fund(s) bought at launch) or 'launch_fund'
+    # (the launch month's F-series fund). None keeps the legacy inference; see hold_basis().
+    hold_benchmark: str | None = None
 
     def __post_init__(self):
         if self.universe is not None:
@@ -81,6 +84,10 @@ class BacktestConfig:
             raise ValueError('Entry margin requires a metric-floor trigger and floor + margin <= 1')
         if not math.isfinite(self.max_turnover_per_review) or not 0 < self.max_turnover_per_review <= 1:
             raise ValueError('max_turnover_per_review must be in (0, 1]')
+        if self.hold_benchmark not in (None, 'initial_selection', 'launch_fund'):
+            raise ValueError('hold_benchmark must be None, initial_selection or launch_fund')
+        if self.hold_benchmark == 'launch_fund' and self.portfolio_size != 1:
+            raise ValueError('A launch-month fund benchmark applies to single-fund runs only')
         if self.weight_band is not None:
             if not math.isfinite(self.weight_band) or not 0 <= self.weight_band <= 1:
                 raise ValueError('weight_band must be None or a fraction in [0, 1]')
@@ -124,15 +131,16 @@ class BacktestConfig:
             raise ValueError('unknown cohort')
 
 
+def hold_basis(config):
+    """Legacy runs without an explicit universe compare against the launch-month fund (workbook parity)."""
+    if config.hold_benchmark is not None:
+        return config.hold_benchmark
+    return 'launch_fund' if config.universe is None and config.portfolio_size == 1 else 'initial_selection'
+
+
 def turnover_controls_enabled(config):
     return (config.confirmation_reviews > 1 or config.min_selection_improvement > 0
             or config.entry_metric_margin > 0 or config.reentry_cooldown_days > 0
             or config.max_replacements_per_review > 0 or config.max_turnover_per_review < 1
             or config.weight_band is not None)
 
-
-def replacement_controls_enabled(config):
-    # Weight bands and confirmation must not independently change candidate assignment.
-    return (config.min_selection_improvement > 0 or config.entry_metric_margin > 0
-            or config.reentry_cooldown_days > 0 or config.max_replacements_per_review > 0
-            or config.max_turnover_per_review < 1)

@@ -1,22 +1,31 @@
 """Shared, deterministic research configurations for the two command-line runners."""
 import argparse
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
+from itertools import product
 from pathlib import Path
 import time
 
-from backtesting.data_pipeline import file_hash
-from backtesting.research import Experiment, ResearchSession
-from config.settings import BacktestConfig, MONTHS, ScoreConfig
-from core.universe import (BUFFER_BANDS, CATALOG_PATH, EXTRA_METRICS, GROUPS,
-                           filter_catalog, load_catalog, validate_universe)
-from studio.archive import DEFAULT_ARCHIVE_ROOT, archive_root_path, save_archive
-from studio.service import SOURCE_PATHS, build_downloads, validate_window
+from backtesting.research import Experiment
+from config.identity import rule_fingerprint
+from config.settings import BacktestConfig, ScoreConfig
+from config.spec import RunSpec
+from core.universe import BUFFER_BANDS, GROUPS, filter_catalog, load_catalog, validate_universe
+from studio.archive import archive_root_path, default_archive_root, save_archive, save_report
+from studio.service import build_downloads, get_session, plan_cohort_windows, run_backtest, write_report
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_GRID = ROOT / 'config/conservative-grid.json'
 METRIC_LABELS = {'ecr': 'ECR', 'buffer_integrity': 'Buffer', 'dbb': 'DBB', 'cap_integrity': 'Cap'}
-PROFILE_FIELDS = {'min_selection_improvement', 'max_replacements_per_review',
-                  'max_turnover_per_review', 'weight_band'}
+PROFILE_FIELDS = {'min_selection_improvement', 'max_replacements_per_review', 'max_turnover_per_review',
+                  'weight_band', 'min_holding_days', 'confirmation_reviews', 'entry_metric_margin',
+                  'reentry_cooldown_days'}
+SELECTION_LABELS = {'highest_ecr': 'ECR', 'highest_dbb': 'DBB', 'highest_buffer_integrity': 'Buffer',
+                    'highest_cap_integrity': 'Cap'}
+# Optional grid dimensions: (grid key, BacktestConfig field, label for case names).
+SETTING_DIMENSIONS = (('selections', 'selection', lambda v: f'select {SELECTION_LABELS[v]}'),
+                      ('execution_lags', 'execution_lag', lambda v: 'next close' if v else 'same close'),
+                      ('costs_bps', 'cost_bps', lambda v: f'{v:g} bps'),
+                      ('comparators', 'comparator', lambda v: f'trigger {v}'))
 
 
 @dataclass(frozen=True)
@@ -33,7 +42,7 @@ def csv_values(value):
 
 
 def add_common_arguments(parser, cohorts=('JAN',)):
-    parser.add_argument('--archive-root', '--output', default=DEFAULT_ARCHIVE_ROOT,
+    parser.add_argument('--archive-root', '--output', default=default_archive_root(),
                         help='Parent folder for a unique run directory (defaults to the shared G: archive).')
     parser.add_argument('--start-date', default='2021-01-19')
     parser.add_argument('--end-date')
@@ -60,10 +69,7 @@ def filters_from_args(args):
 
 
 def research_session():
-    session = ResearchSession(SOURCE_PATHS['metrics'], SOURCE_PATHS['benchmarks'], SOURCE_PATHS['cycles'],
-                              supplemental_metrics=sorted(EXTRA_METRICS.glob('*.csv')))
-    session.sources['catalogue'] = {'path': str(CATALOG_PATH), 'sha256': file_hash(CATALOG_PATH)}
-    return session
+    return get_session()
 
 
 def resolve_universe(filters, catalogue, available):
@@ -95,47 +101,88 @@ def base_config(args):
 
 
 def make_case(name, filters, catalogue, available, base, n=3, metric='buffer_integrity', floor=.8,
-              cadence='monthly', controls=None):
+              cadence='monthly', controls=None, rule='floor', score_overrides=None, settings=None):
+    """One research case. rule='floor' fires below `floor`; rule='drop' fires when `metric` falls by `floor`
+    (a fraction) from its value at purchase. settings override selection, lag, cost or comparator."""
     tickers, selected = resolve_universe(filters, catalogue, available)
     if n > len(tickers):
         raise ValueError(f'{name}: {n} positions requested but only {len(tickers)} funds have history.')
     if metric not in METRIC_LABELS:
         raise ValueError(f'Unknown trigger: {metric}')
-    if cadence not in ('monthly', 'quarterly', 'semiannual', 'annual'):
-        raise ValueError('Review cadence must be monthly, quarterly, semiannual or annual.')
+    if rule not in ('floor', 'drop') or (rule == 'drop' and metric == 'ecr'):
+        raise ValueError('Trigger rules are floor (any metric) or drop (a component metric).')
+    if cadence not in ('daily', 'monthly', 'quarterly', 'semiannual', 'annual'):
+        raise ValueError('Review cadence must be daily, monthly, quarterly, semiannual or annual.')
     controls = controls or {}
     if set(controls) - PROFILE_FIELDS:
         raise ValueError(f'Unknown turnover controls: {sorted(set(controls)-PROFILE_FIELDS)}')
+    settings = settings or {}
+    if set(settings) - {field for _, field, _ in SETTING_DIMENSIONS}:
+        raise ValueError(f'Unknown case settings: {sorted(settings)}')
     score = ScoreConfig()
     if selected.outcome_type.iloc[0] == 'Quarterly':
         score = replace(score, period_center=45, period_width=18.75)
+    score = replace(score, **(score_overrides or {}))
+    if rule == 'drop':
+        trigger = dict(trigger='buffer_drop', buffer_metric=metric, buffer_drop=floor)
+    elif metric == 'ecr':
+        trigger = dict(trigger='ecr', threshold=floor)
+    else:
+        trigger = dict(trigger='metric_floor', buffer_metric=metric, metric_floor=floor)
     config = replace(base, client_name=name, portfolio_size=n, universe=tickers, review=cadence,
-                     trigger='ecr' if metric == 'ecr' else 'metric_floor',
-                     threshold=floor if metric == 'ecr' else 1.5,
-                     buffer_metric=metric if metric != 'ecr' else 'buffer_integrity',
-                     metric_floor=floor if metric != 'ecr' else .8, **controls)
+                     **trigger, **settings, **controls)
     return ResearchCase(Experiment(name, score, config), filters)
 
 
+def _variants(grid, key, default):
+    values = grid.get(key, [default])
+    if not isinstance(values, list) or not values:
+        raise ValueError(f'Grid {key} must be a nonempty list.')
+    return values
+
+
 def grid_cases(grid, catalogue, available, base):
-    allowed = {'universes', 'portfolio_sizes', 'review_cadences', 'triggers', 'turnover_profiles', 'include_single_ticker_reference'}
-    if set(grid) - allowed:
-        raise ValueError(f'Unknown grid keys: {sorted(set(grid)-allowed)}')
-    for key in allowed - {'include_single_ticker_reference'}:
+    """Expand a grid JSON into named cases. Optional dimensions (score_profiles, selections, execution_lags,
+    costs_bps, comparators, trigger_drops) default to the base settings and appear in names only when they vary."""
+    required = {'universes', 'portfolio_sizes', 'review_cadences', 'triggers', 'turnover_profiles'}
+    optional = {'include_single_ticker_reference', 'score_profiles', 'trigger_drops',
+                *(key for key, _, _ in SETTING_DIMENSIONS)}
+    if set(grid) - required - optional:
+        raise ValueError(f'Unknown grid keys: {sorted(set(grid)-required-optional)}')
+    for key in required:
         if not grid.get(key):
             raise ValueError(f'Grid requires nonempty {key}.')
+    score_profiles = _variants(grid, 'score_profiles', {'name': 'Standard ECR'})
+    score_fields = {f.name for f in fields(ScoreConfig)}
+    for profile in score_profiles:
+        if set(profile) - score_fields - {'name'} or 'name' not in profile:
+            raise ValueError(f'Score profiles need a name and ScoreConfig fields only: {profile}')
+    dimensions = [(field, label, _variants(grid, key, getattr(base, field))) for key, field, label in SETTING_DIMENSIONS]
+    triggers = [('floor', metric, values) for metric, values in grid['triggers'].items()]
+    triggers += [('drop', metric, values) for metric, values in grid.get('trigger_drops', {}).items()]
     cases = []
+
+    def add(name, filters, *args, **kwargs):
+        for profile in score_profiles:
+            for combination in product(*(values for _, _, values in dimensions)):
+                settings = {field: value for (field, _, _), value in zip(dimensions, combination)}
+                suffix = [label(value) for (field, label, values), value in zip(dimensions, combination) if len(values) > 1]
+                if len(score_profiles) > 1:
+                    suffix.insert(0, profile['name'])
+                overrides = {k: v for k, v in profile.items() if k != 'name'}
+                cases.append(make_case(' / '.join([name, *suffix]), filters, catalogue, available, base, *args,
+                                       score_overrides=overrides, settings=settings, **kwargs))
+
     for filters in grid['universes']:
         universe_name = filters.get('name', filters.get('group', 'F series'))
         if grid.get('include_single_ticker_reference', True):
-            cases.append(make_case(f'{universe_name} / Super Buffer reference / N=1 / ECR < 1.5 / monthly',
-                                   filters, catalogue, available, base, n=1, metric='ecr', floor=1.5))
+            add(f'{universe_name} / Super Buffer reference / N=1 / ECR < 1.5 / monthly', filters, n=1, metric='ecr', floor=1.5)
         for n in grid['portfolio_sizes']:
             for cadence in grid['review_cadences']:
-                for metric, floors in grid['triggers'].items():
-                    if not floors:
+                for rule, metric, values in triggers:
+                    if not values:
                         raise ValueError(f'Trigger {metric} needs at least one threshold.')
-                    for floor in floors:
+                    for value in values:
                         for profile in grid['turnover_profiles']:
                             unknown = set(profile) - PROFILE_FIELDS - {'name', 'turnover_budget_by_size'}
                             if unknown:
@@ -148,27 +195,24 @@ def grid_cases(grid, catalogue, available, base):
                                     controls['max_turnover_per_review'] = profile['turnover_budget_by_size'][str(n)]
                                 except KeyError as exc:
                                     raise ValueError(f'Turnover profile needs a budget for N={n}.') from exc
-                            name = f'{universe_name} / N={n} / {METRIC_LABELS.get(metric, metric)} < {floor:g} / {cadence} / {profile["name"]}'
-                            cases.append(make_case(name, filters, catalogue, available, base, n, metric, floor, cadence, controls))
+                            rule_text = (f'{METRIC_LABELS[metric]} < {value:g}' if rule == 'floor'
+                                         else f'{METRIC_LABELS[metric]} drop {value:.0%}')
+                            add(f'{universe_name} / N={n} / {rule_text} / {cadence} / {profile["name"]}', filters,
+                                n, metric, value, cadence, controls, rule=rule)
     names = [c.experiment.name for c in cases]
-    configs = [replace(c.experiment.backtest, client_name='Research') for c in cases]
-    if len(set(names)) != len(names) or len(set(configs)) != len(configs):
-        raise ValueError('Grid contains duplicate names or equivalent configurations.')
+    rules = [rule_fingerprint(c.experiment.score, c.experiment.backtest) for c in cases]
+    if len(set(names)) != len(names) or len(set(rules)) != len(rules):
+        raise ValueError('Grid contains duplicate names or economically equivalent configurations.')
     return cases
 
 
 def preflight_cases(session, cases):
     """Reject invalid windows and incomparable launches before writing reports."""
-    from backtesting.engine import _start_index
-    import pandas as pd
     windows = None
     for case in cases:
         e = case.experiment
         data = session.prepare(e.score, e.backtest.universe)
-        validate_window(data, e.backtest)
-        end = pd.Timestamp(e.backtest.end_date) if e.backtest.end_date else data.dates[-1]
-        stop = data.dates.searchsorted(end, side='right')
-        current = [(c, data.dates[_start_index(data, c, e.backtest)], data.dates[stop-1]) for c in e.backtest.cohorts]
+        current = [(w['cohort'], w['start'], w['end']) for w in plan_cohort_windows(data, e.backtest)]
         if windows is not None and current != windows:
             raise ValueError('Comparisons require identical launch and end dates. Narrow the window or run these universes separately.')
         windows = current
@@ -185,13 +229,36 @@ def ensure_archive_root(root):
     return path
 
 
-def run_and_archive(session, case, archive_root, catalogue, folder_name=None, *, plots=True):
+def run_and_archive(session, case, archive_root, catalogue, folder_name=None, *, plots=True, excel='full', package=True):
+    """Simulate one case and archive its report.
+
+    package=True keeps a downloadable results.zip beside the extracted report (single runs).
+    Suites pass package=False and excel='compact': the report is written straight into its folder.
+    """
     e = case.experiment
     began = time.perf_counter()
-    result = session.run(e.score, e.backtest)
+    result = run_backtest(RunSpec(e.score, e.backtest, name=e.name, filters=case.filters), session)
     result['universe'] = catalogue.loc[catalogue.ticker.isin(e.backtest.universe)].copy()
     result['requested_archive_root'] = str(archive_root)
     result['sources'] = {**result['sources'], 'universe_filters': case.filters}
-    folder = save_archive(build_downloads(result, plots=plots), archive_root, e.name, result['strategy_id'], folder_name=folder_name)
+    if package:
+        folder = save_archive(build_downloads(result, plots=plots, excel=excel), archive_root, e.name,
+                              result['strategy_id'], folder_name=folder_name)
+    else:
+        folder = save_report(lambda path: write_report(result, path, plots=plots, excel=excel), archive_root,
+                             e.name, result['strategy_id'], folder_name=folder_name)
     print(f'  Saved ({time.perf_counter()-began:.1f}s): {folder}', flush=True)
     return result, folder
+
+
+# Kept in memory per suite case; detailed ledgers are already on disk.
+COMPARISON_KEYS = ('summary', 'daily', 'parameters', 'timings', 'strategy_id', 'sources',
+                   'rule_fingerprint', 'run_fingerprint')
+
+
+def run_suite_case(case, archive_root, folder_name):
+    """One suite case in any process: compact report written in place, comparison inputs returned."""
+    result, folder = run_and_archive(research_session(), case, archive_root, load_catalog(), folder_name=folder_name,
+                                     plots=False, excel='compact', package=False)
+    return {key: result[key] for key in COMPARISON_KEYS}, folder
+

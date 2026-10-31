@@ -16,6 +16,7 @@ from config.settings import BacktestConfig, ScoreConfig
 from core.universe import load_catalog, filter_catalog, validate_universe
 from studio.archive import save_archive, DEFAULT_ARCHIVE_ROOT
 from test_portfolio import portfolio_data
+from test_studio import wait_for_archive
 
 
 def fixture_downloads():
@@ -136,11 +137,18 @@ except ImportError:
 
 @unittest.skipUnless(APP_AVAILABLE,'Install requirements-app.txt')
 class StudioUniverseTests(unittest.TestCase):
+    def setUp(self):
+        temp=tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        environment=patch.dict(os.environ,{'ECR_ARCHIVE_ROOT':temp.name})
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def test_pending_groups_profiles_custom_selection_and_archive(self):
-        app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'),default_timeout=60).run()
+        app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'),default_timeout=180).run()
         self.assertFalse(app.exception)
         self.assertEqual(app.number_input(key='cost').value,0.)
-        self.assertNotIn('holding_days', [widget.key for widget in app.number_input])
+        self.assertIn('min_holding_days', [widget.key for widget in app.number_input])
         self.assertEqual(app.selectbox(key='preset').options, ['Super Buffer', 'UCITS Conservative'])
         self.assertEqual(app.selectbox(key='lag').value,1)
         app.selectbox(key='universe_group').select('Quarterly structures').run()
@@ -163,12 +171,12 @@ class StudioUniverseTests(unittest.TestCase):
             result=app.session_state['result']
             self.assertEqual(set(result['holdings'].Fund)-{'FFEB','FMAR'},set())
             self.assertEqual(set(result['decisions'].Date.dt.month),{3,6,9,12})
-            folder=Path(app.session_state['archive_path'])
+            folder=Path(wait_for_archive(app))
             self.assertTrue((folder/'results.zip').exists())
             self.assertTrue((folder/'universe.csv').exists())
             self.assertTrue(list((folder/'charts').glob('*.png')))
             self.assertFalse(app.session_state['archive_error'])
-            book=pd.ExcelFile(BytesIO(app.session_state['downloads']['excel']))
+            book=pd.ExcelFile(BytesIO(app.session_state['downloads']['full']['excel']))
             self.assertIn('Fund Universe',book.sheet_names)
             app.segmented_control(key='view').set_value('Configure').run()
             self.assertEqual(set(app.multiselect(key='selected_tickers').value),{'FFEB','FMAR'})

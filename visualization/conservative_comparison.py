@@ -1,10 +1,15 @@
 """Readable batch reports: cohort-aligned curves, downside rankings and run links."""
+from dataclasses import asdict
 from html import escape
+import json
 from pathlib import Path
 
 import pandas as pd
 
 from backtesting.research import comparison_table
+from config.identity import rule_fingerprint
+from config.settings import ScoreConfig
+from studio.service import describe_rule
 
 
 def export_batch_comparison(results, cases, folders, output, *, plots="top5", chart_cohort=None):
@@ -16,7 +21,7 @@ def export_batch_comparison(results, cases, folders, output, *, plots="top5", ch
     table['Mean Annualized Return'] = [r['summary']['Annualized Return'].mean() for r in results.values()]
     table['Total Return Rank'] = table['Mean Total Return'].rank(ascending=False, method='min', na_option='bottom').astype(int)
     table['Sharpe Rank'] = table['Mean Sharpe'].rank(ascending=False, method='min', na_option='bottom').astype(int)
-    table['Drawdown Rank'] = table['Worst Drawdown'].rank(ascending=False, method='min').astype(int)
+    table['Drawdown Rank'] = table['Worst Drawdown'].rank(ascending=False, method='min', na_option='bottom').astype(int)
     table['Sortino Rank'] = table['Mean Sortino'].rank(ascending=False, method='min', na_option='bottom').astype(int)
     table['Turnover Rank'] = table['Mean Annualized Turnover'].rank(ascending=True, method='min', na_option='bottom').astype(int)
     configs = []
@@ -25,7 +30,12 @@ def export_batch_comparison(results, cases, folders, output, *, plots="top5", ch
         cfg = e.backtest
         config = {'Experiment': e.name, 'Configuration ID': f'C{i:03d}', 'Universe': ', '.join(cfg.universe), 'N': cfg.portfolio_size,
                   'Review': cfg.review, 'Trigger': 'ecr' if cfg.trigger == 'ecr' else cfg.buffer_metric,
-                  'Threshold': cfg.threshold if cfg.trigger == 'ecr' else cfg.metric_floor,
+                  'Trigger Rule': 'drop' if cfg.trigger == 'buffer_drop' else 'floor',
+                  'Threshold': {'ecr': cfg.threshold, 'buffer_drop': cfg.buffer_drop}.get(cfg.trigger, cfg.metric_floor),
+                  'Rule': describe_rule(cfg), 'Selection': cfg.selection, 'Execution Lag': cfg.execution_lag,
+                  'Cost bps': cfg.cost_bps, 'Comparator': cfg.comparator,
+                  'Score Profile': 'Standard ECR' if e.score == ScoreConfig() else json.dumps(asdict(e.score)),
+                  'Rule Fingerprint': rule_fingerprint(e.score, cfg),
                   'Score improvement': cfg.min_selection_improvement, 'Max replacements': cfg.max_replacements_per_review,
                   'Turnover budget': cfg.max_turnover_per_review, 'Weight band': cfg.weight_band,
                   'Report folder': folders[e.name].relative_to(output).as_posix()}
@@ -145,7 +155,8 @@ def render_top_five(curves, winners, cases, output, chart_cohort):
         rows = []
         for name, row in selected.iterrows():
             trigger = {'ecr':'ECR','buffer_integrity':'Buffer','cap_integrity':'Cap','dbb':'DBB'}[row.Trigger]
-            rows.append([ids[name], str(int(row['Portfolio Size'])), f'{trigger} < {row.Threshold:g}', row.Review,
+            rule = f'{trigger} drop {row.Threshold:.0%}' if row['Trigger Rule'] == 'drop' else f'{trigger} < {row.Threshold:g}'
+            rows.append([ids[name], str(int(row['Portfolio Size'])), rule, row.Review,
                          f'{row["Score improvement"]:g}', str(int(row['Max replacements'])) if row['Max replacements'] else 'All',
                          f'{row["Turnover budget"]:.0%}', 'Drift' if pd.isna(row['Weight band']) else f'±{row["Weight band"]*100:g}',
                          universe_ids[row.Universe], f'{row[metric]:.3f}' if key=='sharpe' else f'{row[metric]:.2%}'])

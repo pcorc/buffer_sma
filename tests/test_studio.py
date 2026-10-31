@@ -2,8 +2,12 @@
 from dataclasses import replace
 from io import BytesIO
 import json
+import os
 from pathlib import Path
+import tempfile
+import time
 import unittest
+from unittest.mock import patch
 from zipfile import ZipFile
 
 import numpy as np
@@ -13,6 +17,17 @@ from backtesting.engine import prepare_data, simulate
 from backtesting.schedule import review_dates
 from config.settings import BacktestConfig, ScoreConfig
 from test_portfolio import portfolio_data
+
+
+def wait_for_archive(app, timeout=240):
+    """Rerun the app until the background archive job has finished; return the archive path."""
+    deadline = time.monotonic() + timeout
+    while app.session_state['archive_job'] is not None:
+        if time.monotonic() > deadline:
+            raise AssertionError('Background archive did not finish in time')
+        time.sleep(.5)
+        app.run()
+    return app.session_state['archive_path']
 
 
 def ranking_data():
@@ -106,6 +121,15 @@ except ImportError:
 
 @unittest.skipUnless(HAS_APP, 'Install requirements-app.txt to run application tests')
 class StudioTests(unittest.TestCase):
+    def setUp(self):
+        # Automatic archiving must never reach the shared drive from a test run.
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.archive_root = temp.name
+        environment = patch.dict(os.environ, {'ECR_ARCHIVE_ROOT': temp.name})
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def test_downloads_have_workbook_config_graphs_and_provenance(self):
         from studio.service import build_downloads, config_json
         config = BacktestConfig(cohorts=('JAN',),review='daily',initial_selection='highest_score',
@@ -128,7 +152,7 @@ class StudioTests(unittest.TestCase):
 
     def test_app_presets_invalid_window_and_successful_run(self):
         from streamlit.testing.v1 import AppTest
-        app = AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'), default_timeout=60).run()
+        app = AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'), default_timeout=180).run()
         self.assertFalse(app.exception)
         app.selectbox(key='preset').select('UCITS Conservative').run()
         self.assertEqual(app.selectbox(key='structure').value,'Fund of funds')
@@ -142,6 +166,8 @@ class StudioTests(unittest.TestCase):
         app.button[0].click().run(timeout=120)
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state['view'],'Results')
+        # Results open before the report exists; the archive completes in the background.
+        self.assertTrue(Path(wait_for_archive(app)).is_relative_to(self.archive_root))
         result = app.session_state['result']
         self.assertEqual(result['parameters']['backtest']['selection'],'highest_dbb')
         self.assertEqual(result['parameters']['backtest']['portfolio_size'],3)
@@ -152,18 +178,47 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(app.number_input(key='fund_count').value,3)
         app.selectbox(key='preset').select('Super Buffer').run()
         self.assertEqual(app.selectbox(key='trigger_metric').value,'ecr')
-        self.assertEqual(app.selectbox(key='ecr_threshold').value,1.5)
+        self.assertEqual(app.number_input(key='ecr_threshold').value,1.5)
         self.assertEqual(app.session_state['result']['parameters']['backtest']['portfolio_size'],3)
+
+    def test_advanced_rules_reach_the_engine_unchanged(self):
+        from streamlit.testing.v1 import AppTest
+        app = AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'), default_timeout=180).run()
+        app.selectbox(key='trigger_rule').select('drop').run()
+        app.selectbox(key='trigger_metric').select('cap_integrity').run()
+        app.number_input(key='buffer_drop_pct').set_value(35.).run()
+        app.selectbox(key='comparator').select('<=').run()
+        app.selectbox(key='cadence').select('quarterly').run()
+        app.number_input(key='min_holding_days').set_value(21).run()
+        app.number_input(key='confirmation_reviews').set_value(2).run()
+        app.selectbox(key='hold_benchmark').select('launch_fund').run()
+        app.selectbox(key='initial_selection').select('cohort').run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.button[0].disabled)
+        app.button[0].click().run(timeout=120)
+        self.assertFalse(app.exception)
+        saved = app.session_state['result']['parameters']['backtest']
+        self.assertEqual((saved['trigger'], saved['buffer_metric'], saved['buffer_drop'], saved['comparator']),
+                         ('buffer_drop', 'cap_integrity', .35, '<='))
+        self.assertEqual((saved['min_holding_days'], saved['confirmation_reviews'], saved['hold_benchmark'],
+                          saved['initial_selection'], saved['review']), (21, 2, 'launch_fund', 'cohort', 'quarterly'))
+        result = app.session_state['result']
+        self.assertIn('Execution Outcome', result['decisions'])
+        self.assertTrue(result['rule_fingerprint'])
+        manifest_dir = Path(wait_for_archive(app))
+        self.assertEqual(json.loads((manifest_dir/'manifest.json').read_text())['rule_fingerprint'], result['rule_fingerprint'])
 
     def test_conservative_preset_and_weight_controls_export(self):
         from streamlit.testing.v1 import AppTest
-        app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'),default_timeout=60).run()
+        app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'),default_timeout=180).run()
         app.selectbox(key='preset').select('UCITS Conservative').run()
         app.number_input(key='score_gap').set_value(.1).run()
         app.number_input(key='turnover_budget').set_value(40.).run()
         app.checkbox(key='use_bands').check().run()
         self.assertFalse(app.exception)
-        self.assertFalse({'holding_days', 'confirmations', 'entry_margin', 'cooldown'} & {w.key for w in app.number_input})
+        # Research levers live in the collapsed advanced section, at neutral preset values.
+        self.assertTrue({'min_holding_days', 'confirmation_reviews', 'entry_metric_margin', 'reentry_cooldown_days'}
+                        <= {w.key for w in app.number_input})
         self.assertAlmostEqual(app.number_input(key='score_gap').value,.1)
         self.assertAlmostEqual(app.number_input(key='turnover_budget').value,40.)
         self.assertTrue(app.checkbox(key='use_bands').value)
@@ -176,7 +231,8 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(saved['min_holding_days'],0)
         self.assertEqual(saved['reentry_cooldown_days'],0)
         self.assertEqual(saved['confirmation_reviews'],1)
-        book=pd.ExcelFile(BytesIO(app.session_state['downloads']['excel']))
+        wait_for_archive(app)
+        book=pd.ExcelFile(BytesIO(app.session_state['downloads']['full']['excel']))
         self.assertIn('Executed Trades',book.sheet_names)
         self.assertIn('Weight Reviews',book.sheet_names)
         app.segmented_control(key='view').set_value('Configure').run()

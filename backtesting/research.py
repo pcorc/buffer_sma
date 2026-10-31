@@ -1,5 +1,6 @@
 """Reusable in-memory research sessions. Loading and scoring are not repeated per trigger."""
 from collections import OrderedDict
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 import json
@@ -8,7 +9,7 @@ import time
 import pandas as pd
 
 from backtesting.data_pipeline import file_hash, load_benchmarks, load_cycles, load_metric_collection
-from backtesting.engine import prepare_data, simulate
+from backtesting.engine import plan_cohort_windows, prepare_data, simulate
 from config.settings import BacktestConfig, ScoreConfig
 
 
@@ -34,21 +35,26 @@ class ResearchSession:
         self.benchmarks = load_benchmarks(benchmarks)
         self.cycles = load_cycles(cycles)
         self._prepared = OrderedDict()
+        self._lock = threading.Lock()
         self.score_builds = 0
 
     def prepare(self, config=ScoreConfig(), universe=None):
-        key = (config, tuple(universe) if universe is not None else None)
-        if key not in self._prepared:
-            self._prepared[key] = prepare_data(self.metrics, self.benchmarks, self.cycles, config, universe=universe)
-            self.score_builds += 1
-            if len(self._prepared) > 8:
-                self._prepared.popitem(last=False)
-        self._prepared.move_to_end(key)
-        return self._prepared[key]
+        # prepare_data sorts tickers, so universe order must not create a second panel.
+        key = (config, tuple(sorted(universe)) if universe is not None else None)
+        # The Studio may serve several browser sessions from one process.
+        with self._lock:
+            if key not in self._prepared:
+                self._prepared[key] = prepare_data(self.metrics, self.benchmarks, self.cycles, config, universe=universe)
+                self.score_builds += 1
+                if len(self._prepared) > 8:
+                    self._prepared.popitem(last=False)
+            self._prepared.move_to_end(key)
+            return self._prepared[key]
 
     def run(self, score=ScoreConfig(), backtest=BacktestConfig()):
         t = time.perf_counter()
         data = self.prepare(score, backtest.universe)
+        plan_cohort_windows(data, backtest)
         prepared = time.perf_counter()
         result = simulate(data, backtest)
         result['timings'] = {'prepare_seconds': prepared-t, 'simulate_seconds': time.perf_counter()-prepared}
@@ -87,7 +93,7 @@ def comparison_table(results):
                      'Mean Weight Rebalances': s['Weight Rebalances'].mean() if 'Weight Rebalances' in s else 0.,
                      'Worst Drawdown': s['Max Drawdown'].min(), 'Mean Switches': s.Switches.mean(),
                      'Mean Switches per Year': s['Switches per Year'].mean(),
-                     'Simulation Seconds': result['timings']['simulate_seconds'],
+                     'Simulation Seconds': result.get('timings', {}).get('simulate_seconds', float('nan')),
                      'Strategy ID': result['strategy_id']})
     return pd.DataFrame(rows).set_index('Experiment')
 

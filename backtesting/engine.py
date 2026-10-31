@@ -6,7 +6,8 @@ import json
 import numpy as np
 import pandas as pd
 
-from config.settings import BacktestConfig, MONTHS, ScoreConfig, turnover_controls_enabled
+from config.identity import identify
+from config.settings import BacktestConfig, MONTHS, ScoreConfig, hold_basis, turnover_controls_enabled
 from core.scoring import score_funds
 from backtesting.schedule import review_dates
 from core.selection import rank_candidates, selection_panel
@@ -107,12 +108,46 @@ def _start_index(data, cohort, config):
     raise ValueError(f'No initial cycle/trading date for {cohort}')
 
 
+def plan_cohort_windows(data, config):
+    """Resolve and validate every launch window before an expensive simulation or report build.
+
+    Returns one {cohort, start, end, sessions} per launch, exactly as simulate() will use them.
+    """
+    end = pd.Timestamp(config.end_date) if config.end_date else data.dates[-1]
+    if pd.Timestamp(config.start_date) >= end:
+        raise ValueError('Choose an end date after the start date.')
+    if end > data.dates[-1]:
+        raise ValueError(f'End date exceeds the available observations (last: {data.dates[-1].date()}).')
+    stop = int(data.dates.searchsorted(end, side='right'))
+    windows = []
+    for cohort in config.cohorts:
+        start = _start_index(data, cohort, config)
+        if start + 1 >= stop:
+            raise ValueError(f'{cohort}: choose a longer window containing its launch month and at least two trading sessions.')
+        if config.initial_selection == 'highest_score' and start < config.execution_lag:
+            raise ValueError(f'{cohort}: no prior session is available for the initial selection; move the start date forward.')
+        if not np.isfinite(data.benchmarks[[start, stop - 1]]).all():
+            raise ValueError(f'{cohort}: SPY/BUFR benchmark prices are missing on {data.dates[start].date()} or '
+                             f'{data.dates[stop - 1].date()}; choose a window whose first and last sessions have both.')
+        review_dates(data.dates, data.cycles, start, stop, config.review)
+        windows.append({'cohort': cohort, 'start': data.dates[start], 'end': data.dates[stop - 1],
+                        'sessions': stop - start})
+    return windows
+
+
 def simulate(data: PreparedData, config=BacktestConfig()):
     if config.universe is not None and set(data.tickers) != set(config.universe):
         raise ValueError('Prepared data does not match the configured universe')
     if config.portfolio_size > 1 or turnover_controls_enabled(config):
         from backtesting.portfolio import simulate_portfolio
-        return simulate_portfolio(data, config)
+        result = simulate_portfolio(data, config)
+    else:
+        result = _simulate_single(data, config)
+    result.update(identify(data.score_config, config, data.tickers, data.data_id, result['summary']))
+    return result
+
+
+def _simulate_single(data, config):
     model_name = 'ecr-ar-v1'
     parameters = {'model': model_name, 'score': asdict(data.score_config),
                   'backtest': asdict(config), 'data_id': data.data_id}
@@ -129,14 +164,13 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                     'cap_integrity': data.caps}[config.buffer_metric]
     diagnostics, decisions, candidates, daily, summaries = [], [], [], [], []
 
+    # Boxed once: indexing a DatetimeIndex per session is a measurable share of the loop.
+    dates = list(data.dates)
     for cohort in config.cohorts:
         initial_fund = 'F' + cohort
-        if config.initial_selection == 'cohort' or config.universe is None:
-            if initial_fund not in data.tickers:
-                raise ValueError(f'Missing cohort fund {initial_fund}')
-            held = initial = data.tickers.index(initial_fund)
-        else:
-            held = initial = 0
+        if (config.initial_selection == 'cohort' or hold_basis(config) == 'launch_fund') and initial_fund not in data.tickers:
+            raise ValueError(f'Missing cohort fund {initial_fund}')
+        held = data.tickers.index(initial_fund) if config.initial_selection == 'cohort' else 0
         start = _start_index(data, cohort, config)
         if start >= stop:
             raise ValueError(f'No observations in requested period for {cohort}')
@@ -150,8 +184,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
             if not len(available):
                 raise ValueError('No eligible initial candidates')
             held = int(rank_candidates(ranking[initial_signal], eligibility[initial_signal], data.tickers)[0])
-        if config.universe is not None and config.initial_selection == 'highest_score':
-            initial = held
+        initial = data.tickers.index(initial_fund) if hold_basis(config) == 'launch_fund' else held
         reviews = review_dates(data.dates, data.cycles, start, stop, config.review)
         bench = data.benchmarks[start:stop]
         if not np.isfinite(bench[[0, -1]]).all() or (bench <= 0).any():
@@ -161,6 +194,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
         hold_prices = data.nav[start:stop, initial]
         if not np.isfinite(hold_prices).all() or (hold_prices <= 0).any():
             raise ValueError(f'Missing or invalid buy-and-hold NAV for {cohort}')
+        hold_curve = 100 * hold_prices / data.nav[start, initial]
         if not np.isfinite(data.scores[start, held]) or data.days[start, held] < config.min_remaining_days:
             raise ValueError(f'Invalid initial score for {initial_fund}')
         nav, last_trade, switches, event_number = 100.0, start, 0, 0
@@ -172,14 +206,14 @@ def simulate(data: PreparedData, config=BacktestConfig()):
         def snapshot(i, fund, signal_i, event_type, outgoing=None, signal_score=None):
             nonlocal event_number
             event_number += 1
-            date, ticker = data.dates[i], data.tickers[fund]
+            date, ticker = dates[i], data.tickers[fund]
             row = data.rows.loc[(date, ticker)]
             if not row.score_valid:
                 raise ValueError(f'Invalid snapshot for {ticker} on {date.date()}')
             event = {'Cohort': cohort.title(), 'Switch #': event_number, 'Date': date, 'Fund': ticker}
             event.update({label: row[column] for label, column in DIAGNOSTIC_MAP.items()})
             event.update({'Strategy ID': strategy_id, 'Event ID': f'{strategy_id}/{cohort}/{event_number}',
-                          'Event Type': event_type, 'Signal Date': data.dates[signal_i],
+                          'Event Type': event_type, 'Signal Date': dates[signal_i],
                           'Execution Date': date, 'From Fund': outgoing,
                           'Selection Score at Signal': signal_score if signal_score is not None else ranking[i, fund],
                           'Selection': config.selection,
@@ -192,7 +226,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
 
         snapshot(start, held, initial_signal, 'initial', signal_score=ranking[initial_signal, held])
         for i in range(start, stop):
-            date = data.dates[i]
+            date = dates[i]
             return_fund = data.tickers[held]
             if not np.isfinite(data.nav[i, held]) or data.nav[i, held] <= 0:
                 raise ValueError(f'Missing held NAV for {return_fund} on {date.date()}')
@@ -200,7 +234,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                 nav *= data.nav[i, held] / data.nav[i - 1, held]
             # Pending selections earn the outgoing fund's return until next-close execution.
             if pending is not None:
-                new, signal_i, signal_score = pending
+                new, signal_i, signal_score, scheduled_row = pending
                 if not np.isfinite(data.nav[i, new]) or data.nav[i, new] <= 0:
                     raise ValueError('Missing execution NAV for pending selection')
                 snapshot(i, new, signal_i, 'switch', data.tickers[held], signal_score)
@@ -208,6 +242,7 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                 entry_buffer = buffer_panel[i, held]
                 trading_cost += nav * config.cost_bps / 10000
                 nav *= 1 - config.cost_bps / 10000
+                scheduled_row.update({'Execution Outcome': 'executed', 'Execution Date': date})
                 pending = None
             if i > start and date in reviews:
                 held_score = data.scores[i, held]
@@ -236,10 +271,14 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                             nav *= 1 - config.cost_bps / 10000
                             switches += 1
                 review_id = f'{strategy_id}/{cohort}/review/{date.date()}'
+                planned = best if fired else held
                 decisions.append({'Strategy ID': strategy_id, 'Review ID': review_id,
                                   'Cohort': cohort.title(), 'Date': date, 'Held Fund': data.tickers[held],
                                   'Held Score': held_score, 'Best Fund': data.tickers[best],
-                                  'Best Score': ranking[i, best], 'Selection': config.selection, 'Holding Days': age,
+                                  'Best Score': ranking[i, best],
+                                  'Top Ranked Fund': data.tickers[best], 'Top Ranked Score': ranking[i, best],
+                                  'Planned Fund': data.tickers[planned], 'Planned Score': ranking[i, planned],
+                                  'Selection': config.selection, 'Holding Days': age,
                                   'Triggered': fired, 'Action': action,
                                   'Threshold': config.threshold, 'Comparator': config.comparator,
                                   'ECR Signal': ecr_signal, 'Buffer Signal': buffer_signal,
@@ -248,7 +287,12 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                                   'Buffer Deterioration': deterioration, 'Buffer Drop Threshold': config.buffer_drop,
                                   'Metric Floor': config.metric_floor, 'Fresh Reference Score': 1.0,
                                   'Metric Fraction of Fresh': buffer_panel[i, held],
-                                  'Trigger': config.trigger})
+                                  'Trigger': config.trigger,
+                                  'Execution Outcome': {'switch': 'executed', 'scheduled': 'pending',
+                                                        'unexecuted_end': 'unexecuted_end'}.get(action, 'none'),
+                                  'Execution Date': date if action == 'switch' else pd.NaT})
+                if action == 'scheduled':
+                    pending = (*pending, decisions[-1])
                 if config.candidate_audit:
                     order = rank_candidates(ranking[i], eligible, data.tickers, [held])
                     ranks = {j: n + 1 for n, j in enumerate(order)}
@@ -267,19 +311,19 @@ def simulate(data: PreparedData, config=BacktestConfig()):
                       'Strategy NAV': nav,
                       'SPY NAV': 100 * data.benchmarks[i, 0] / data.benchmarks[start, 0],
                       'BUFR NAV': 100 * data.benchmarks[i, 1] / data.benchmarks[start, 1],
-                      'Hold NAV': 100 * data.nav[i, initial] / data.nav[start, initial]}
+                      'Hold NAV': hold_curve[i - start]}
             cohort_daily.append(record)
         daily.extend(cohort_daily)
         curve = pd.DataFrame(cohort_daily)
         returns = curve['Strategy NAV'].pct_change().dropna()
         total = nav / 100 - 1
-        elapsed = (data.dates[stop - 1] - data.dates[start]).days
+        elapsed = (dates[stop - 1] - dates[start]).days
         annual = (nav / 100)**(365 / elapsed) - 1 if elapsed else np.nan
         volatility = returns.std() * np.sqrt(252)
         downside = np.sqrt(np.mean(np.minimum(returns, 0)**2)) * np.sqrt(252)
         sharpe = returns.mean() / returns.std() * np.sqrt(252) if returns.std() > 0 else np.nan
         summaries.append({'Strategy ID': strategy_id, 'Cohort': cohort.title(),
-                          'Start': data.dates[start], 'End': data.dates[stop - 1], 'Observations': len(curve),
+                          'Start': dates[start], 'End': dates[stop - 1], 'Observations': len(curve),
                           'Total Return': total, 'Annualized Return': annual,
                           'Annualized Volatility': volatility, 'Sharpe': sharpe,
                           'Annualized Downside Deviation': downside,

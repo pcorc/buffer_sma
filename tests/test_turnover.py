@@ -96,7 +96,37 @@ class TurnoverTests(unittest.TestCase):
         self.assertEqual(result['summary'].Switches.iloc[0],0)
         self.assertEqual(result['trades'].Action.tolist(),['deferred_execution_budget'])
         self.assertIn('scheduled',result['decisions'].Action.tolist())
+        # The signal-time action is kept; the outcome records what execution actually did.
+        scheduled=result['decisions'].loc[result['decisions'].Action=='scheduled']
+        self.assertEqual(scheduled['Execution Outcome'].tolist(),['deferred_execution_budget'])
+        self.assertEqual(scheduled['Execution Date'].tolist(),[pd.Timestamp('2021-01-21')])
         self.assertEqual(result['holdings'].loc[result['holdings'].Date==pd.Timestamp('2021-01-21')].Fund.tolist(),['FJAN','FFEB'])
+
+    def test_non_binding_controls_reproduce_standard_on_real_data(self):
+        from config.settings import MONTHS, ScoreConfig
+        from studio.service import load_dataset
+        universe=tuple('F'+m for m in MONTHS)
+        data,_=load_dataset(ScoreConfig(),universe)
+        base=BacktestConfig(universe=universe,initial_selection='highest_score',execution_lag=1,comparator='<',
+                            candidate_audit=False,cohorts=('JAN','MAY','SEP'),trigger='metric_floor')
+        for n,review,metric,floor in [(2,'monthly','buffer_integrity',.9),(3,'quarterly','buffer_integrity',.8),(5,'monthly','dbb',.9)]:
+            standard=simulate(data,replace(base,portfolio_size=n,review=review,buffer_metric=metric,metric_floor=floor))
+            for control in ({'min_selection_improvement':1e-300},{'max_replacements_per_review':12},
+                            {'max_turnover_per_review':1-1e-15}):
+                with self.subTest(n=n,review=review,control=control):
+                    controlled=simulate(data,replace(base,portfolio_size=n,review=review,buffer_metric=metric,metric_floor=floor,**control))
+                    np.testing.assert_array_equal(controlled['daily']['Strategy NAV'],standard['daily']['Strategy NAV'])
+                    self.assertEqual(controlled['holdings'].Fund.tolist(),standard['holdings'].Fund.tolist())
+
+    def test_binding_limit_still_buys_best_available_fund(self):
+        # Two triggered slots, one replacement allowed: the worst slot gets the top candidate.
+        config=replace(self.config,max_replacements_per_review=1)
+        plan,reasons=controlled_plan(held=np.array([0,1]),triggered=[0,1],ranking=np.array([1.,1.1,2.,1.9]),
+                                     eligible=np.ones(4,dtype=bool),tickers=['A','B','C','D'],
+                                     metric=np.array([.6,.5,1.,1.]),weights=np.array([.5,.5]),
+                                     last_exit=np.full(4,-100),index=10,config=config)
+        self.assertEqual(plan,{1:2})
+        self.assertEqual(reasons,{1:'replacement_allowed',0:'replacement_limit'})
 
     def test_repurchase_cooldown_uses_actual_sale_date(self):
         metrics,bench,cycles=portfolio_data()

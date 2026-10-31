@@ -8,14 +8,13 @@ import pandas as pd
 
 from backtesting.engine import DIAGNOSTIC_MAP, _start_index, trigger_signals
 from backtesting.schedule import review_dates
-from config.settings import replacement_controls_enabled
+from config.settings import hold_basis
 from core.turnover import controlled_plan, weight_band_breached
-from core.selection import rank_candidates, replacement_plan, selection_panel
+from core.selection import rank_candidates, selection_panel
 
 
 def simulate_portfolio(data, config):
     n = config.portfolio_size
-    controlled = replacement_controls_enabled(config)
     parameters = {'model': 'ecr-ar-v1', 'score': asdict(data.score_config),
                   'backtest': asdict(config), 'data_id': data.data_id,
                   'portfolio_policy': ('equal-initial-sleeves; replace-breached-only; ' +
@@ -32,6 +31,8 @@ def simulate_portfolio(data, config):
     diagnostics, decisions, candidates, daily, holdings, summaries = [], [], [], [], [], []
     trades, weight_reviews = [], []
 
+    # Boxed once: indexing a DatetimeIndex per session is a measurable share of the loop.
+    dates = list(data.dates)
     for cohort in config.cohorts:
         start = _start_index(data, cohort, config)
         if start >= stop:
@@ -41,12 +42,14 @@ def simulate_portfolio(data, config):
             raise ValueError('No prior session for initial selection signal')
         ranked = rank_candidates(ranking[signal_i], eligibility[signal_i], data.tickers)
         if len(ranked) < n:
-            raise ValueError(f'{cohort}: requested {n} funds, only {len(ranked)} eligible on {data.dates[signal_i].date()}')
+            raise ValueError(f'{cohort}: requested {n} funds, only {len(ranked)} eligible on {dates[signal_i].date()}')
         held = np.array(ranked[:n], dtype=int)
         if n == 1 and config.initial_selection == 'cohort':
             held[0] = data.tickers.index('F' + cohort)
         initial = held.copy()
-        if n == 1 and config.universe is None:
+        if hold_basis(config) == 'launch_fund':
+            if 'F' + cohort not in data.tickers:
+                raise ValueError(f'Missing cohort fund F{cohort}')
             initial[0] = data.tickers.index('F' + cohort)
         reviews = review_dates(data.dates, data.cycles, start, stop, config.review)
         bench = data.benchmarks[start:stop]
@@ -56,6 +59,7 @@ def simulate_portfolio(data, config):
         initial_prices = data.nav[start:stop, initial]
         if not np.isfinite(initial_prices).all() or (initial_prices <= 0).any():
             raise ValueError(f'Missing or invalid buy-and-hold NAV for {cohort}')
+        hold_curve = 100 * np.ascontiguousarray(initial_prices / data.nav[start, initial]).mean(axis=1)
         if not np.isfinite(data.scores[start, held]).all():
             raise ValueError('Invalid initial portfolio score')
         capital = np.full(n, 100. / n)
@@ -73,15 +77,15 @@ def simulate_portfolio(data, config):
         def snapshot(i, slot, fund, signal_index, event_type, outgoing=None):
             nonlocal event_number
             event_number += 1
-            row = data.rows.loc[(data.dates[i], data.tickers[fund])]
+            row = data.rows.loc[(dates[i], data.tickers[fund])]
             if not row.score_valid:
                 raise ValueError(f'Invalid execution snapshot for {data.tickers[fund]}')
-            event = {'Cohort': cohort.title(), 'Switch #': event_number, 'Date': data.dates[i],
+            event = {'Cohort': cohort.title(), 'Switch #': event_number, 'Date': dates[i],
                      'Fund': data.tickers[fund]}
             event.update({label: row[column] for label, column in DIAGNOSTIC_MAP.items()})
             event.update({'Strategy ID': strategy_id, 'Event ID': f'{strategy_id}/{cohort}/{event_number}',
                           'Position': slot+1, 'Portfolio Size': n, 'Event Type': event_type,
-                          'Signal Date': data.dates[signal_index], 'Execution Date': data.dates[i],
+                          'Signal Date': dates[signal_index], 'Execution Date': dates[i],
                           'From Fund': outgoing, 'Selection Score at Signal': ranking[signal_index, fund], 'Selection': config.selection,
                           'Threshold': config.threshold, 'Comparator': config.comparator,
                           'Review': config.review, 'Data ID': data.data_id, 'Model': 'ecr-ar-v1',
@@ -90,19 +94,26 @@ def simulate_portfolio(data, config):
                           'Capital Before Cost': capital[slot]})
             diagnostics.append(event)
 
-        def execute(plan, signal_index, i, rebalance_weights=False):
+        def record_outcome(row, outcome, i):
+            if row is not None:
+                row.update({'Execution Outcome': outcome, 'Execution Date': dates[i]})
+
+        def execute(plan, signal_index, i, rebalance_weights=False, rows=None, weight_row=None):
             nonlocal switches, cumulative_cost, cumulative_turnover, weight_rebalances
+            rows = rows or {}
             total_before = float(capital.sum())
             spent = 0.0
-            for slot, new in plan.items():
+            # Worst-first priority matters only when the budget can defer trades; otherwise keep stable slot order.
+            for slot, new in (plan.items() if config.max_turnover_per_review < 1 else sorted(plan.items())):
                 old = held[slot]
                 if new == old:
                     continue
                 fraction = capital[slot] / total_before
                 # Next-close prices can change sleeve weights; recheck the actual budget.
                 if spent + fraction > config.max_turnover_per_review + 1e-12:
-                    trades.append({'Cohort': cohort.title(), 'Date': data.dates[i],
-                                   'Signal Date': data.dates[signal_index], 'Position': slot+1,
+                    record_outcome(rows.get(slot), 'deferred_execution_budget', i)
+                    trades.append({'Cohort': cohort.title(), 'Date': dates[i],
+                                   'Signal Date': dates[signal_index], 'Position': slot+1,
                                    'Type': 'replacement', 'Action': 'deferred_execution_budget',
                                    'From Fund': data.tickers[old], 'Fund': data.tickers[new],
                                    'One-way Turnover': 0., 'Cost NAV Units': 0.})
@@ -113,8 +124,8 @@ def simulate_portfolio(data, config):
                     raise ValueError('Replacement plan would duplicate holdings')
                 snapshot(i, slot, new, signal_index, 'switch', data.tickers[old])
                 cost = capital[slot] * config.cost_bps / 10000
-                trades.append({'Cohort': cohort.title(), 'Date': data.dates[i],
-                               'Signal Date': data.dates[signal_index], 'Position': slot+1,
+                trades.append({'Cohort': cohort.title(), 'Date': dates[i],
+                               'Signal Date': dates[signal_index], 'Position': slot+1,
                                'Type': 'replacement', 'Action': 'executed',
                                'From Fund': data.tickers[old], 'Fund': data.tickers[new],
                                'One-way Turnover': fraction, 'Cost NAV Units': cost})
@@ -128,6 +139,7 @@ def simulate_portfolio(data, config):
                 confirmation[slot] = 0
                 entry_metric[slot] = metric[i, new]
                 switches += 1
+                record_outcome(rows.get(slot), 'executed', i)
             if rebalance_weights:
                 # Band breach is decided at signal time; the next-close target is equal weights.
                 gross = float(capital.sum())
@@ -142,8 +154,9 @@ def simulate_portfolio(data, config):
                     cumulative_cost += cost
                     cumulative_turnover += fraction
                     weight_rebalances += int(action == 'executed')
-                trades.append({'Cohort': cohort.title(), 'Date': data.dates[i],
-                               'Signal Date': data.dates[signal_index], 'Type': 'weight_rebalance',
+                record_outcome(weight_row, action, i)
+                trades.append({'Cohort': cohort.title(), 'Date': dates[i],
+                               'Signal Date': dates[signal_index], 'Type': 'weight_rebalance',
                                'Action': action, 'One-way Turnover': fraction if action == 'executed' else 0.,
                                'Cost NAV Units': cost})
             if len(set(held)) != n:
@@ -152,15 +165,15 @@ def simulate_portfolio(data, config):
         for slot, fund in enumerate(held):
             snapshot(start, slot, fund, signal_i, 'initial')
         for i in range(start, stop):
-            date = data.dates[i]
+            date = dates[i]
             return_funds = ','.join(data.tickers[j] for j in held)
             if not np.isfinite(data.nav[i, held]).all() or (data.nav[i, held] <= 0).any():
                 raise ValueError(f'Missing held NAV on {date.date()}')
             if i > start:
                 capital *= data.nav[i, held] / data.nav[i-1, held]
             if pending is not None:
-                plan, signal_index, rebalance_weights = pending
-                execute(plan, signal_index, i, rebalance_weights)
+                plan, signal_index, rebalance_weights, rows, weight_row = pending
+                execute(plan, signal_index, i, rebalance_weights, rows, weight_row)
                 pending = None
             if i > start and date in reviews:
                 signals = [trigger_signals(data.scores[i, j], metric[i, j], entry_metric[slot], config)
@@ -173,22 +186,27 @@ def simulate_portfolio(data, config):
                                   'minimum_hold' if i-last_trade[slot] < config.min_holding_days else
                                   'awaiting_confirmation' if confirmation[slot] < config.confirmation_reviews else
                                   'no_better_candidate') for slot,sig in enumerate(signals)}
-                if controlled:
-                    plan, control_reasons = controlled_plan(held, triggered, ranking[i], eligibility[i],
-                                                           data.tickers, data.scores[i] if config.trigger == 'ecr' else metric[i], capital/capital.sum(),
-                                                           last_exit, i, config)
-                    reasons.update(control_reasons)
-                else:
-                    plan = replacement_plan(held, triggered, ranking[i], eligibility[i], data.tickers)
-                    reasons.update({slot: 'replacement_allowed' if new != held[slot] else 'no_better_candidate'
-                                    for slot,new in plan.items()})
+                # Controls only restrict the standard plan, so one route serves every configuration.
+                plan, control_reasons = controlled_plan(held, triggered, ranking[i], eligibility[i],
+                                                       data.tickers, data.scores[i] if config.trigger == 'ecr' else metric[i], capital/capital.sum(),
+                                                       last_exit, i, config)
+                reasons.update(control_reasons)
+                top = rank_candidates(ranking[i], eligibility[i], data.tickers, held)
+                top = top[0] if top else None
                 rebalance_weights = weight_band_breached(capital, config.weight_band)
+                weight_row = None
                 if config.weight_band is not None:
+                    weight_action = (('unexecuted_end' if config.execution_lag and i+1 >= stop else
+                                      'scheduled' if config.execution_lag else 'execution_check') if rebalance_weights else 'within_band')
                     weight_reviews.append({'Cohort': cohort.title(), 'Date': date,
                                            'Max Weight Deviation': float(np.abs(capital/capital.sum()-1/n).max()),
                                            'Weight Band': config.weight_band, 'Breached': rebalance_weights,
-                                           'Action': ('unexecuted_end' if config.execution_lag and i+1 >= stop else
-                                                      'scheduled' if config.execution_lag else 'execution_check') if rebalance_weights else 'within_band'})
+                                           'Action': weight_action,
+                                           'Execution Outcome': {'within_band': 'none', 'unexecuted_end': 'unexecuted_end'}.get(weight_action, 'pending'),
+                                           'Execution Date': pd.NaT})
+                    if weight_action in ('scheduled', 'execution_check'):
+                        weight_row = weight_reviews[-1]
+                rows = {}
                 review_id = f'{strategy_id}/{cohort}/review/{date.date()}'
                 for slot, fund in enumerate(held):
                     new = plan.get(slot, fund)
@@ -200,7 +218,11 @@ def simulate_portfolio(data, config):
                     decisions.append({'Strategy ID': strategy_id, 'Review ID': review_id, 'Position': slot+1,
                                       'Cohort': cohort.title(), 'Date': date, 'Held Fund': data.tickers[fund],
                                       'Held Score': data.scores[i, fund], 'Best Fund': data.tickers[new],
-                                      'Best Score': ranking[i, new], 'Selection': config.selection, 'Holding Days': i-last_trade[slot],
+                                      'Best Score': ranking[i, new],
+                                      'Top Ranked Fund': data.tickers[top] if top is not None else None,
+                                      'Top Ranked Score': ranking[i, top] if top is not None else np.nan,
+                                      'Planned Fund': data.tickers[new], 'Planned Score': ranking[i, new],
+                                      'Selection': config.selection, 'Holding Days': i-last_trade[slot],
                                       'Triggered': slot in triggered, 'Raw Trigger': signals[slot][0],
                                       'Confirmation Reviews': int(confirmation[slot]), 'Control Reason': reasons[slot],
                                       'Action': action, 'Trigger': config.trigger,
@@ -209,7 +231,12 @@ def simulate_portfolio(data, config):
                                       'Entry Buffer Score': entry_metric[slot], 'Buffer Deterioration': decline,
                                       'Buffer Drop Threshold': config.buffer_drop, 'Metric Floor': config.metric_floor,
                                       'Fresh Reference Score': 1., 'Metric Fraction of Fresh': metric[i, fund],
-                                      'Threshold': config.threshold, 'Comparator': config.comparator})
+                                      'Threshold': config.threshold, 'Comparator': config.comparator,
+                                      'Execution Outcome': {'hold': 'none', 'no_switch': 'none',
+                                                            'unexecuted_end': 'unexecuted_end'}.get(action, 'pending'),
+                                      'Execution Date': pd.NaT})
+                    if action in ('switch', 'scheduled'):
+                        rows[slot] = decisions[-1]
                 if config.candidate_audit:
                     ranked = rank_candidates(ranking[i], eligibility[i], data.tickers, held)
                     ranks = {j: rank+1 for rank,j in enumerate(ranked)}
@@ -219,15 +246,15 @@ def simulate_portfolio(data, config):
                                            'Cohort': cohort.title(), 'Date': date, 'Fund': ticker,
                                            'ECR': data.scores[i,j], 'Selection': config.selection, 'Selection Score': ranking[i,j], 'Eligible': bool(eligibility[i,j]),
                                            'Rank': ranks.get(j), 'Retained Position': j in retained,
-                                           'Selected': j in plan.values(), 'Available for Replacement': j not in (set(held) if controlled else retained),
+                                           'Selected': j in plan.values(), 'Available for Replacement': j not in retained,
                                            'Passes Entry Margin': not config.entry_metric_margin or metric[i,j] >= config.metric_floor+config.entry_metric_margin,
                                            'Outside Cooldown': i-last_exit[j] >= config.reentry_cooldown_days,
                                            'Current Holding': j in held})
                 if config.execution_lag:
                     if i+1 < stop and (rebalance_weights or any(new != held[slot] for slot,new in plan.items())):
-                        pending = (plan, i, rebalance_weights)
+                        pending = (plan, i, rebalance_weights, rows, weight_row)
                 else:
-                    execute(plan, i, i, rebalance_weights)
+                    execute(plan, i, i, rebalance_weights, rows, weight_row)
             total = float(capital.sum())
             weights = capital / total
             record = {'Strategy ID': strategy_id, 'Cohort': cohort.title(), 'Date': date,
@@ -238,7 +265,7 @@ def simulate_portfolio(data, config):
                       'Strategy NAV': total, 'Position Count': n, 'Cumulative Trading Cost': cumulative_cost,
                       'SPY NAV': 100 * data.benchmarks[i,0] / data.benchmarks[start,0],
                       'BUFR NAV': 100 * data.benchmarks[i,1] / data.benchmarks[start,1],
-                      'Hold NAV': 100 * np.mean(data.nav[i,initial] / data.nav[start,initial])}
+                      'Hold NAV': hold_curve[i - start]}
             cohort_daily.append(record)
             for slot,fund in enumerate(held):
                 holdings.append({'Strategy ID': strategy_id, 'Cohort': cohort.title(), 'Date': date,
@@ -248,11 +275,11 @@ def simulate_portfolio(data, config):
         daily.extend(cohort_daily)
         curve = pd.DataFrame(cohort_daily)
         returns = curve['Strategy NAV'].pct_change().dropna()
-        elapsed = (data.dates[stop-1] - data.dates[start]).days
+        elapsed = (dates[stop-1] - dates[start]).days
         total_return = capital.sum()/100-1
         downside = np.sqrt(np.mean(np.minimum(returns,0)**2))*np.sqrt(252)
         summaries.append({'Strategy ID': strategy_id, 'Cohort': cohort.title(), 'Client': config.client_name,
-                          'Portfolio Size': n, 'Start': data.dates[start], 'End': data.dates[stop-1],
+                          'Portfolio Size': n, 'Start': dates[start], 'End': dates[stop-1],
                           'Observations': len(curve), 'Total Return': total_return,
                           'Annualized Return': (capital.sum()/100)**(365/elapsed)-1 if elapsed else np.nan,
                           'Annualized Volatility': returns.std()*np.sqrt(252),

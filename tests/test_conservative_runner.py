@@ -40,8 +40,31 @@ class ConservativeRunnerTests(unittest.TestCase):
             self.assertEqual(config.reentry_cooldown_days,0)
             self.assertEqual(config.confirmation_reviews,1)
             self.assertEqual(config.entry_metric_margin,0)
+        # The session is shared process-wide; all 85 cases must reuse a single score panel.
+        before = self.session.score_builds
         preflight_cases(self.session,cases)
-        self.assertEqual(self.session.score_builds,1)
+        self.assertLessEqual(self.session.score_builds-before,1)
+
+    def test_optional_dimensions_cover_every_setting(self):
+        grid = {'universes':[{'name':'F annual','group':'F series','outcome':'Annual'}],'portfolio_sizes':[3],
+                'review_cadences':['monthly'],'triggers':{'buffer_integrity':[.8]},
+                'trigger_drops':{'cap_integrity':[.25]},
+                'turnover_profiles':[{'name':'Held','min_holding_days':21,'confirmation_reviews':2,'reentry_cooldown_days':5}],
+                'score_profiles':[{'name':'Standard ECR'},{'name':'Defensive','dbb_weight':1.8,'reset_weight':.9}],
+                'selections':['highest_ecr','highest_dbb'],'execution_lags':[1],'costs_bps':[0.,5.],'comparators':['<'],
+                'include_single_ticker_reference':False}
+        cases = grid_cases(grid,self.catalogue,self.available,self.base)
+        self.assertEqual(len(cases),2*2*2*2)  # triggers × score profiles × selections × costs
+        names = [c.experiment.name for c in cases]
+        self.assertIn('F annual / N=3 / Cap drop 25% / monthly / Held / Defensive / select DBB / 5 bps',names)
+        case = cases[names.index('F annual / N=3 / Cap drop 25% / monthly / Held / Defensive / select DBB / 5 bps')]
+        config = case.experiment.backtest
+        self.assertEqual((config.trigger,config.buffer_metric,config.buffer_drop),('buffer_drop','cap_integrity',.25))
+        self.assertEqual((config.selection,config.cost_bps,config.min_holding_days,config.confirmation_reviews,
+                          config.reentry_cooldown_days),('highest_dbb',5.,21,2,5))
+        self.assertEqual((case.experiment.score.dbb_weight,case.experiment.score.reset_weight),(1.8,.9))
+        with self.assertRaisesRegex(ValueError,'Score profiles'):
+            grid_cases({**grid,'score_profiles':[{'name':'x','dbb_wieght':2}]},self.catalogue,self.available,self.base)
 
     def test_filters_and_grid_reject_missing_data_typos_and_duplicates(self):
         chosen,_ = resolve_universe({'months':['JAN','FEB','MAR'],'references':['SPY']},self.catalogue,self.available)
@@ -55,7 +78,11 @@ class ConservativeRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'duplicate'):
             grid_cases({**self.grid,'portfolio_sizes':[3,3]},self.catalogue,self.available,self.base)
         with self.assertRaisesRegex(ValueError,'Unknown profile'):
-            grid_cases({**self.grid,'turnover_profiles':[{'name':'bad','confirmation_reviews':2}]},self.catalogue,self.available,self.base)
+            grid_cases({**self.grid,'turnover_profiles':[{'name':'bad','cooldown':2}]},self.catalogue,self.available,self.base)
+        with self.assertRaisesRegex(ValueError,'equivalent'):
+            # Same economics under two names: B states the default budget explicitly.
+            grid_cases({**self.grid,'turnover_profiles':[{'name':'A'},{'name':'B','max_turnover_per_review':1.}]},
+                       self.catalogue,self.available,self.base)
         with self.assertRaisesRegex(ValueError,'only 3 funds'):
             make_case('too many',{'months':['JAN','FEB','MAR']},self.catalogue,self.available,self.base,n=5)
         with self.assertRaisesRegex(ValueError,'budget for N=4'):
@@ -127,7 +154,7 @@ class ConservativeRunnerTests(unittest.TestCase):
     def test_batch_failure_records_partial_state_without_complete_marker(self):
         from scripts.run_conservative_suite import main
         with tempfile.TemporaryDirectory() as temp:
-            with patch('scripts.run_conservative_suite.run_and_archive',side_effect=OSError('disk full')):
+            with patch('scripts.run_conservative_suite.run_suite_case',side_effect=OSError('disk full')):
                 with self.assertRaises(SystemExit) as caught:
                     main(['--archive-root',temp,'--limit','1','--cohorts','JAN','--end-date','2022-12-30'])
             self.assertEqual(caught.exception.code,1)

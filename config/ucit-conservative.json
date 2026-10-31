@@ -13,6 +13,9 @@
     "client_name": "UCITS Conservative",
     "portfolio_size": 3,
     "selection": "highest_ecr",
-    "min_holding_days": 0
+    "min_holding_days": 0,
+    "hold_benchmark": "initial_selection",
+    "candidate_audit": false,
+    "universe": ["FJAN", "FFEB", "FMAR", "FAPR", "FMAY", "FJUN", "FJUL", "FAUG", "FSEP", "FOCT", "FNOV", "FDEC"]
   }
 }

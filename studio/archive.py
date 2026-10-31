@@ -11,6 +11,11 @@ from zipfile import ZipFile
 DEFAULT_ARCHIVE_ROOT = r'G:\Shared drives\Portfolio Management\Funds\Archive\Model Portfolio Allocation\ECR Backtest Results'
 
 
+def default_archive_root():
+    """Read at call time so tests and other machines can redirect archives with ECR_ARCHIVE_ROOT."""
+    return os.environ.get('ECR_ARCHIVE_ROOT') or DEFAULT_ARCHIVE_ROOT
+
+
 def archive_root_path(root):
     """Validate a destination on the machine running the app or research script."""
     root_text = str(root).strip()
@@ -33,10 +38,10 @@ def new_archive_path(root, run_name, strategy_id):
     return base / f'{stamp}_{name}_{strategy_id[:8]}_{uuid4().hex[:6]}'
 
 
-def save_archive(downloads, root, run_name, strategy_id, *, folder_name=None):
-    """Create a unique folder; publish success only after every file is written.
+def save_report(write, root, run_name, strategy_id, *, folder_name=None):
+    """Run write(folder) into a new unique folder; publish success only after every file is written.
 
-    A failed save raises OSError; callers retain the in-memory ZIP for download.
+    write must create the folder itself. A failed save raises and removes the partial folder.
     A Windows drive path must never become a literal relative folder on Linux.
     """
     if folder_name is not None:
@@ -45,10 +50,24 @@ def save_archive(downloads, root, run_name, strategy_id, *, folder_name=None):
         folder = archive_root_path(root) / folder_name
     else:
         folder = new_archive_path(root, run_name, strategy_id)
-    created = False
+    if folder.exists():
+        raise OSError(f'Archive folder already exists: {folder}')
     try:
+        write(folder)
+        (folder / 'ARCHIVE_COMPLETE.txt').write_text('Completed report archive. See manifest.json for the run configuration and source hashes.\n')
+        return folder
+    except Exception:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+
+
+def save_archive(downloads, root, run_name, strategy_id, *, folder_name=None):
+    """Extract a downloaded report package and keep its ZIP beside it.
+
+    A failed save raises OSError; callers retain the in-memory ZIP for download.
+    """
+    def extract(folder):
         folder.mkdir(parents=True, exist_ok=False)
-        created = True
         with ZipFile(BytesIO(downloads['zip'])) as archive:
             for entry in archive.infolist():
                 target = folder / entry.filename
@@ -56,9 +75,4 @@ def save_archive(downloads, root, run_name, strategy_id, *, folder_name=None):
                     raise OSError('Invalid report archive path.')
             archive.extractall(folder)
         (folder / 'results.zip').write_bytes(downloads['zip'])
-        (folder / 'ARCHIVE_COMPLETE.txt').write_text('Completed report archive. See manifest.json for the run configuration and source hashes.\n')
-        return folder
-    except Exception:
-        if created:
-            shutil.rmtree(folder, ignore_errors=True)
-        raise
+    return save_report(extract, root, run_name, strategy_id, folder_name=folder_name)

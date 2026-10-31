@@ -124,6 +124,21 @@ def evaluate_windows(curves, regimes=REGIMES):
     return details,summary,pd.DataFrame(coverage)
 
 
+# Comparison-workbook columns written since the grid gained these dimensions; older workbooks lack them.
+RECORDED_SETTINGS = {'Selection': ('selection', str), 'Execution Lag': ('execution_lag', int),
+                     'Cost bps': ('cost_bps', float), 'Comparator': ('comparator', str)}
+
+
+def recorded_settings(config):
+    """Rebuild a workbook configuration faithfully; absent columns keep the fresh-start defaults."""
+    if config.get('Score Profile', 'Standard ECR') != 'Standard ECR':
+        raise ValueError(f'{config.Experiment}: fresh starts support the standard ECR score only.')
+    settings = {field: kind(config[column]) for column, (field, kind) in RECORDED_SETTINGS.items()
+                if column in config and pd.notna(config[column])}
+    rule = config.get('Trigger Rule')
+    return {'settings': settings, 'rule': rule if isinstance(rule, str) else 'floor'}
+
+
 def fresh_checks(configs, output, regimes=REGIMES):
     """Reuse the engine with declared new inceptions before each stress period."""
     from backtesting.conservative_runner import make_case, research_session, preflight_cases
@@ -146,7 +161,7 @@ def fresh_checks(configs, output, regimes=REGIMES):
             case = make_case(config.Experiment,{'group':'Custom universe','outcome':'Annual',
                              'tickers':[t.strip() for t in config.Universe.split(',')]},catalogue,
                              session.metrics.ticker.unique(),base,n=int(config.N),metric=config.Trigger,
-                             floor=float(config.Threshold),cadence=config.Review)
+                             floor=float(config.Threshold),cadence=config.Review,**recorded_settings(config))
             preflight_cases(session,[case])
             e = case.experiment
             result = session.run(e.score,e.backtest)

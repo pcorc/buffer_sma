@@ -1,5 +1,6 @@
 """Run the filtered conservative grid and archive individual and aggregate reports."""
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
@@ -8,7 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from backtesting.conservative_runner import (DEFAULT_GRID, add_common_arguments, base_config,
-    ensure_archive_root, grid_cases, preflight_cases, research_session, run_and_archive)
+    ensure_archive_root, grid_cases, preflight_cases, research_session, run_suite_case)
 from config.settings import MONTHS
 from core.universe import load_catalog
 from studio.archive import new_archive_path
@@ -24,6 +25,8 @@ def main(argv=None, *, default_grid=DEFAULT_GRID):
     parser.add_argument('--limit', type=int, help='Run only the first N matching cases, for a small inspection batch.')
     parser.add_argument('--plots', choices=['top5', 'none'], default='top5',
                         help='Default: three top-five comparison charts only. Use none to skip all plotting.')
+    parser.add_argument('--workers', type=int, default=1,
+                        help='Parallel processes. Each loads the data once; results are recorded in case order.')
     parser.add_argument('--chart-cohort', type=str.upper, choices=MONTHS,
                         help='Launch shown in static charts; defaults to the first requested cohort. HTML can switch launches.')
     args = parser.parse_args(argv)
@@ -32,6 +35,8 @@ def main(argv=None, *, default_grid=DEFAULT_GRID):
     try:
         if args.limit is not None and args.limit < 1:
             raise ValueError('--limit must be at least 1.')
+        if args.workers < 1:
+            raise ValueError('--workers must be at least 1.')
         grid = json.loads(args.grid.read_text())
         catalogue = load_catalog()
         session = research_session()
@@ -70,18 +75,25 @@ def main(argv=None, *, default_grid=DEFAULT_GRID):
         write_status()
         results, folders = {}, {}
         print(f'Batch folder: {output}',flush=True)
-        for i,case in enumerate(cases,1):
-            name = case.experiment.name
-            print(f'[{i}/{len(cases)}] {name}',flush=True)
-            # Short child names keep the user's deep Windows archive below path limits.
-            result, folder = run_and_archive(session,case,output/'runs',catalogue,folder_name=f'{i:03d}',plots=False)
-            # Detailed ledgers are already on disk; keep only comparison inputs in RAM.
-            results[name] = {k:result[k] for k in ('summary','daily','parameters','timings','strategy_id','sources')}
-            folders[name] = folder
-            status['completed'].append({'name':name,'folder':folder.relative_to(output).as_posix(),
-                                        'strategy_id':result['strategy_id']})
-            write_status()
-            del result
+        # Short child names keep the user's deep Windows archive below path limits.
+        jobs = [(case, output/'runs', f'{i:03d}') for i, case in enumerate(cases, 1)]
+        pool = ProcessPoolExecutor(max_workers=args.workers) if args.workers > 1 else None
+        try:
+            # Submit every case up front so workers stay busy; the sequential path runs lazily in order.
+            outcomes = ([pool.submit(run_suite_case, *job) for job in jobs] if pool else
+                        (run_suite_case(*job) for job in jobs))
+            for i, (case, outcome) in enumerate(zip(cases, outcomes), 1):
+                name = case.experiment.name
+                print(f'[{i}/{len(cases)}] {name}',flush=True)
+                result, folder = outcome.result() if pool else outcome
+                results[name] = result
+                folders[name] = folder
+                status['completed'].append({'name':name,'folder':folder.relative_to(output).as_posix(),
+                                            'strategy_id':result['strategy_id']})
+                write_status()
+        finally:
+            if pool:
+                pool.shutdown(cancel_futures=True)
         export_batch_comparison(results,cases,folders,output,plots=args.plots,chart_cohort=args.chart_cohort)
         status.update(state='complete',prepared_panels=session.score_builds,
                       completed_utc=datetime.now(timezone.utc).isoformat())

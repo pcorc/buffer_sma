@@ -2,7 +2,6 @@
 import argparse
 from dataclasses import asdict, fields
 from datetime import datetime, timezone
-import json
 from pathlib import Path
 import subprocess
 import time
@@ -10,6 +9,7 @@ import time
 from backtesting.data_pipeline import file_hash, load_benchmarks, load_cycles, metric_paths, load_metric_collection
 from backtesting.engine import prepare_data, simulate
 from config.settings import BacktestConfig, ScoreConfig
+from config.spec import RunSpec
 from utils.exporters import export_results
 
 ROOT = Path(__file__).resolve().parent
@@ -21,7 +21,7 @@ def parser():
                    help='Website Metrics XLSX, normalized decimal CSV, or original percentage CSV')
     p.add_argument('--benchmarks', type=Path, default=ROOT / 'input_data/benchmark_ts.csv')
     p.add_argument('--cycles', type=Path, default=ROOT / 'input_data/roll_dates.csv')
-    p.add_argument('--config', type=Path, help='JSON object with score and backtest settings')
+    p.add_argument('--config', type=Path, help='Saved configuration, run manifest.json or suite plan entry')
     p.add_argument('--output', type=Path, help='New output directory (must not exist)')
     p.add_argument('--threshold', type=float)
     p.add_argument('--client-name')
@@ -42,6 +42,7 @@ def parser():
     p.add_argument('--buffer-metric', choices=['buffer_integrity', 'dbb', 'cap_integrity'])
     p.add_argument('--metric-floor', type=float, help='Fraction of ideal fresh component score 1, e.g. 0.8')
     p.add_argument('--buffer-drop', type=float)
+    p.add_argument('--hold-benchmark', choices=['initial_selection', 'launch_fund'])
     for name in ('confirmation_reviews', 'reentry_cooldown_days', 'max_replacements_per_review'):
         p.add_argument('--' + name.replace('_', '-'), type=int)
     for name in ('min_selection_improvement', 'entry_metric_margin', 'max_turnover_per_review', 'weight_band'):
@@ -56,11 +57,9 @@ def parser():
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    supplied = json.loads(args.config.read_text()) if args.config else {}
-    if set(supplied) - {'score', 'backtest'}:
-        raise ValueError('Config only accepts score and backtest objects')
-    score_options = supplied.get('score', {}).copy()
-    backtest_options = supplied.get('backtest', {}).copy()
+    # A saved Studio config, a run manifest or a suite plan entry; flags below override it.
+    spec = RunSpec.from_json(args.config) if args.config else RunSpec()
+    score_options, backtest_options = asdict(spec.score), asdict(spec.backtest)
     for field in fields(ScoreConfig):
         if getattr(args, field.name) is not None:
             score_options[field.name] = getattr(args, field.name)
@@ -72,8 +71,6 @@ def main(argv=None):
         backtest_options['universe'] = tuple(t.strip().upper() for t in args.universe.split(','))
     if args.cohorts:
         backtest_options['cohorts'] = tuple(c.strip().upper() for c in args.cohorts.split(','))
-    elif 'cohorts' in backtest_options:
-        backtest_options['cohorts'] = tuple(backtest_options['cohorts'])
     if args.no_audit:
         backtest_options['candidate_audit'] = False
     score_config, config = ScoreConfig(**score_options), BacktestConfig(**backtest_options)
@@ -92,6 +89,7 @@ def main(argv=None):
     except (OSError, subprocess.CalledProcessError):
         commit, dirty = None, None
     manifest = {'created_utc': stamp, **result['parameters'], 'strategy_id': result['strategy_id'],
+                **{key: result[key] for key in ('engine_version', 'rule_fingerprint', 'run_fingerprint')},
                 'git_commit': commit, 'git_dirty': dirty,
                 'sources': {name: {'path': str(getattr(args, name).resolve()),
                                    'sha256': file_hash(getattr(args, name))}
