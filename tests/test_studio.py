@@ -13,6 +13,7 @@ from zipfile import ZipFile
 import numpy as np
 import pandas as pd
 
+import _ecr_db  # noqa: F401 (pins ECR_AS_OF before any data loads)
 from backtesting.engine import prepare_data, simulate
 from backtesting.schedule import review_dates
 from config.settings import BacktestConfig, ScoreConfig

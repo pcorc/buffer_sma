@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
+import _ecr_db  # noqa: F401 (pins ECR_AS_OF before any data loads)
 from backtesting.conservative_runner import (DEFAULT_GRID, base_config, grid_cases, make_case,
                                              preflight_cases, research_session, resolve_universe)
 from config.settings import ScoreConfig
@@ -65,6 +66,21 @@ class ConservativeRunnerTests(unittest.TestCase):
         self.assertEqual((case.experiment.score.dbb_weight,case.experiment.score.reset_weight),(1.8,.9))
         with self.assertRaisesRegex(ValueError,'Score profiles'):
             grid_cases({**grid,'score_profiles':[{'name':'x','dbb_wieght':2}]},self.catalogue,self.available,self.base)
+
+    def test_groups_combine_and_quarterly_universes_use_quarterly_timing(self):
+        chosen,selected = resolve_universe({'group':['Max Buffer','D series']},self.catalogue,self.available)
+        self.assertTrue((selected.strategy.eq('Max Buffer')|selected.series.eq('D')).all())
+        self.assertTrue(selected.outcome_type.eq('Annual').all())
+        grid = json.loads((DEFAULT_GRID.parent/'conservative-maxbuffer-deep.json').read_text())
+        cases = grid_cases(grid,self.catalogue,self.available,self.base)
+        self.assertEqual(len(cases),85)
+        self.assertTrue(all(c.experiment.backtest.universe == chosen for c in cases))
+        self.assertTrue(cases[0].experiment.name.startswith('Max Buffer + D series / '))
+        case = make_case('quarterly',{'group':'Quarterly structures'},self.catalogue,self.available,self.base,
+                         n=1,metric='ecr',floor=1.5)
+        self.assertEqual((case.experiment.score.period_center,case.experiment.score.period_width),(45.,18.75))
+        universe = self.catalogue.set_index('ticker').loc[list(case.experiment.backtest.universe)]
+        self.assertTrue(universe.outcome_type.eq('Quarterly').all())
 
     def test_filters_and_grid_reject_missing_data_typos_and_duplicates(self):
         chosen,_ = resolve_universe({'months':['JAN','FEB','MAR'],'references':['SPY']},self.catalogue,self.available)

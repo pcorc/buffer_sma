@@ -53,7 +53,7 @@ plotting, `--list` to preview the cases, or `--cohorts JAN` for a smaller first 
 The grid is saved in `config/conservative-thresholds.json`.
 
 Compare matched launch dates and stress windows before choosing a floor. Pass the
-newly exported `comparison.xlsx` to the regime analysis command below; it supports
+new batch folder to the regime analysis command below; it supports
 all 27 cases, including fresh-start checks, without adding trading-rule controls.
 
 ## Stress-window reports
@@ -61,19 +61,21 @@ all 27 cases, including fresh-start checks, without adding trading-rule controls
 To study a saved comparison without rerunning its backtests:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts/analyze_conservative_regimes.py --workbook "C:\path\to\comparison.xlsx"
+.\.venv\Scripts\python.exe scripts/analyze_conservative_regimes.py --batch "C:\path\to\batch-folder"
 ```
 
-Use the actual path to your exported workbook. The report goes to a new folder
+Use the actual batch folder (the one holding `comparison.csv` and the `nav_<Launch>.csv`
+files; `comparison.xlsx` is a report and is not read). Batches written before the
+NAV CSV files existed need rerunning. The report goes to a new folder
 in the same G-drive archive. `--archive-root "C:\ECR Results"` changes that location.
 The script checks **all** NAV/summary rows for consistent total return, maximum
 drawdown, Sharpe and start/end dates, then selects only the simple monthly cases.
-`--review all` also includes simple quarterly cases from the source workbook.
+`--review all` also includes simple quarterly cases from the batch.
 
 For new portfolios started before each stress event, add:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts/analyze_conservative_regimes.py --workbook "C:\path\to\comparison.xlsx" --fresh-starts
+.\.venv\Scripts\python.exe scripts/analyze_conservative_regimes.py --batch "C:\path\to\batch-folder" --fresh-starts
 ```
 
 | Stress test | Exact evaluation closes | Fresh portfolio entry under the supplied roll calendar |
@@ -88,11 +90,11 @@ as context. COVID 2020 appears explicitly as unavailable for the uploaded 2021
 launches. A valid COVID test would need the then-investable universe and suitable
 benchmark history; it cannot assume all twelve current funds already existed.
 
-May 2024 is intentional: the current source file has missing SPY and BUFR values
+May 2024 is intentional: the benchmark table has missing SPY and BUFR values
 at the June 24 inception, which the engine correctly rejects. No prices are
 filled. Fresh simulations run through the declared later end date and evaluate
 only the stated stress interval; this does not change their chronological trading
-rules. The full replay plan, input hashes and CSV ledgers are saved in `fresh_runs/`.
+rules. The full replay plan, source table hashes and CSV ledgers are saved in `fresh_runs/`.
 
 ## Read the results
 

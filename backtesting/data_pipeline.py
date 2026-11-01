@@ -1,5 +1,4 @@
-"""Read raw metrics explicitly: Excel decimals or the original percentage CSV."""
-from pathlib import Path
+"""Normalize raw metric tables from the ecr database into the engine's exact frame contracts."""
 import hashlib
 
 import numpy as np
@@ -7,6 +6,7 @@ import pandas as pd
 
 from core.scoring import INPUTS
 
+# Original percentage-point export headers (converted once by normalize_metrics).
 CSV_COLUMNS = {
     'Fund': 'ticker', 'Date': 'date', 'Fund Value (USD)': 'fund_value',
     'Reference Asset Return (%)': 'reference_asset_return',
@@ -17,6 +17,7 @@ CSV_COLUMNS = {
     'Original Cap Net (%)': 'fund_cap_net', 'Original Buffer Net (%)': 'buffer_net',
 }
 PERCENT_COLUMNS = tuple(name for name in INPUTS if name != 'remaining_outcome_days')
+METRIC_COLUMNS = ('ticker', 'date', 'fund_value', *INPUTS)
 
 
 def file_hash(path):
@@ -27,22 +28,24 @@ def file_hash(path):
     return digest.hexdigest()
 
 
-def load_metrics(path) -> pd.DataFrame:
-    """Only Website Metrics is read from workbooks; model inputs are never formula caches."""
-    path = Path(path)
-    if path.suffix.lower() == '.xlsx':
-        frame = pd.read_excel(path, sheet_name='Website Metrics', usecols='A:T')
-    else:
-        frame = pd.read_csv(path)
+def content_hash(frame):
+    """Column names plus the same row hash data_id uses: identical frames, identical hash."""
+    names = frame.columns if isinstance(frame, pd.DataFrame) else [frame.name]
+    digest = hashlib.sha256(','.join(map(str, names)).encode())
+    digest.update(pd.util.hash_pandas_object(frame, index=True).values.tobytes())
+    return digest.hexdigest()
+
+
+def normalize_metrics(frame) -> pd.DataFrame:
+    """Decimal metrics in, or the original percentage-point headers (converted once)."""
     if 'Fund' in frame.columns:
         frame = frame.rename(columns=CSV_COLUMNS)
         for name in PERCENT_COLUMNS:
             frame[name] = pd.to_numeric(frame[name], errors='coerce') / 100
-    required = ('ticker', 'date', 'fund_value', *INPUTS)
-    missing = set(required) - set(frame.columns)
+    missing = set(METRIC_COLUMNS) - set(frame.columns)
     if missing:
         raise ValueError(f'Missing metric columns: {sorted(missing)}')
-    frame = frame.loc[:, required].copy()
+    frame = frame.loc[:, METRIC_COLUMNS].copy()
     frame['date'] = pd.to_datetime(frame.date, errors='raise').dt.normalize()
     if frame.date.isna().any() or frame.ticker.isna().any():
         raise ValueError('Missing ticker/date')
@@ -55,31 +58,18 @@ def load_metrics(path) -> pd.DataFrame:
     return frame.sort_values(['date', 'ticker']).reset_index(drop=True)
 
 
-def load_benchmarks(path):
-    frame = pd.read_csv(path)
+def normalize_benchmarks(frame):
+    """Date, SPY and BUFR columns; missing closes stay NaN rows, never filled."""
+    frame = frame.copy()
     frame['Date'] = pd.to_datetime(frame.Date).dt.normalize()
     if frame.Date.duplicated().any():
         raise ValueError('Duplicate benchmark dates')
     return frame.set_index('Date')[['SPY', 'BUFR']].sort_index().apply(pd.to_numeric)
 
 
-def load_cycles(path):
-    """The supplied monthly calendar includes holiday-adjusted option-cycle dates."""
-    cycles = pd.to_datetime(pd.read_csv(path)['monthly'].dropna()).dt.normalize()
+def normalize_cycles(values):
+    """The monthly calendar includes holiday-adjusted option-cycle dates."""
+    cycles = pd.to_datetime(pd.Series(values).dropna()).dt.normalize()
     if cycles.duplicated().any():
         raise ValueError('Duplicate monthly cycle dates')
     return pd.DatetimeIndex(cycles.sort_values())
-
-
-def metric_paths(primary, supplemental_directory=None):
-    paths = [Path(primary)]
-    if supplemental_directory is not None:
-        paths.extend(sorted(Path(supplemental_directory).glob('*.csv')))
-    return paths
-
-
-def load_metric_collection(paths):
-    frame = pd.concat([load_metrics(p) for p in paths], ignore_index=True)
-    if frame.duplicated(['ticker', 'date']).any():
-        raise ValueError('Duplicate ticker/date observations across metric files')
-    return frame.sort_values(['date', 'ticker']).reset_index(drop=True)

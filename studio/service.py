@@ -1,4 +1,5 @@
 """UI-independent configuration, data loading, and downloadable run artifacts."""
+import copy
 from dataclasses import asdict
 from datetime import datetime, timezone
 from io import BytesIO
@@ -10,16 +11,14 @@ import threading
 import time
 from zipfile import ZipFile, ZIP_DEFLATED, ZIP_STORED
 
-from backtesting.data_pipeline import file_hash, load_benchmarks, load_cycles, metric_paths, load_metric_collection
-from core.universe import CATALOG_PATH, EXTRA_METRICS, load_catalog
+from backtesting import ecr_source
+from core.universe import load_catalog
 from backtesting.engine import plan_cohort_windows, prepare_data  # noqa: F401 (re-exported)
 from config.settings import BacktestConfig, ScoreConfig
 from config.spec import RunSpec
 from utils.exporters import export_results
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_PATHS = {name: ROOT / 'input_data' / file for name, file in (
-    ('metrics', 'website_metrics.csv'), ('benchmarks', 'benchmark_ts.csv'), ('cycles', 'roll_dates.csv'))}
 METRICS = {'ecr': 'ECR', 'dbb': 'Downside Before Buffer',
            'buffer_integrity': 'Buffer Integrity', 'cap_integrity': 'Cap Integrity'}
 SELECTIONS = {f'highest_{key}': f'Highest {label}' for key, label in METRICS.items()}
@@ -35,18 +34,14 @@ SCHEDULE_NOTES = {
 
 
 def source_signature():
-    paths = [*SOURCE_PATHS.values(), CATALOG_PATH, *sorted(EXTRA_METRICS.glob('*.csv'))]
-    return tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in paths)
+    """Changes whenever an ecr source table changes (checked at most every ECR_SIGNATURE_TTL seconds)."""
+    return ecr_source.signature(), ecr_source.as_of_default()
 
 
 def load_dataset(score, universe=None):
-    paths = metric_paths(SOURCE_PATHS['metrics'], EXTRA_METRICS)
-    sources = {name: {'path': str(p), 'sha256': file_hash(p)} for name, p in SOURCE_PATHS.items()}
-    sources['catalogue'] = {'path': str(CATALOG_PATH), 'sha256': file_hash(CATALOG_PATH)}
-    sources['supplemental_metrics'] = [{'path': str(p), 'sha256': file_hash(p)} for p in paths[1:]]
-    data = prepare_data(load_metric_collection(paths), load_benchmarks(SOURCE_PATHS['benchmarks']),
-                        load_cycles(SOURCE_PATHS['cycles']), score, universe=universe)
-    return data, sources
+    session = get_session()
+    data = prepare_data(session.metrics, session.benchmarks, session.cycles, score, universe=universe)
+    return data, copy.deepcopy(session.sources)
 
 
 _SESSIONS = {}
@@ -54,14 +49,12 @@ _SESSION_LOCK = threading.Lock()
 
 
 def get_session():
-    """One loaded dataset per process, rebuilt when any source file changes (Studio, scripts, notebook)."""
+    """One loaded dataset per process, rebuilt when the ecr tables change (Studio, scripts, notebook)."""
     from backtesting.research import ResearchSession
     signature = source_signature()
     with _SESSION_LOCK:
         if signature not in _SESSIONS:
-            session = ResearchSession(SOURCE_PATHS['metrics'], SOURCE_PATHS['benchmarks'], SOURCE_PATHS['cycles'],
-                                      supplemental_metrics=sorted(EXTRA_METRICS.glob('*.csv')))
-            session.sources['catalogue'] = {'path': str(CATALOG_PATH), 'sha256': file_hash(CATALOG_PATH)}
+            session = ResearchSession.from_source()
             _SESSIONS.clear()
             _SESSIONS[signature] = session
         return _SESSIONS[signature]
@@ -74,17 +67,36 @@ def run_backtest(spec, session=None):
     return result
 
 
-def source_mismatches(sources):
-    """Names of recorded inputs whose content differs from the current repository files."""
-    current = {name: file_hash(path) for name, path in SOURCE_PATHS.items()}
-    return sorted(name for name, recorded in (sources or {}).items()
-                  if name in current and isinstance(recorded, dict) and recorded.get('sha256') != current[name])
+def source_mismatches(sources, session=None):
+    """Names of recorded sources whose loaded content differs from the current ecr tables.
+
+    File-era records (a path, no table) cannot be compared with a table and are reported too.
+    """
+    current = (session or get_session()).sources
+    changed = []
+    for name, recorded in (sources or {}).items():
+        if name not in current or not isinstance(recorded, dict):
+            continue
+        if 'table' not in recorded:
+            changed.append(f'{name} (recorded from a file)')
+        elif recorded.get('sha256') != current[name]['sha256']:
+            changed.append(name)
+    return sorted(changed)
+
+
+def input_changes(spec, session=None):
+    """Recorded inputs that differ now. A recorded data_id is checked for the run's own universe,
+    so loading other funds does not flag it; otherwise the source hashes are compared."""
+    session = session or get_session()
+    recorded = spec.provenance.get('data_id')
+    if recorded:
+        return [] if session.prepare(spec.score, spec.backtest.universe).data_id == recorded else ['data']
+    return source_mismatches(spec.provenance.get('sources'), session)
 
 
 def available_catalogue():
-    metrics = load_metric_collection(metric_paths(SOURCE_PATHS['metrics'], EXTRA_METRICS))
     catalogue = load_catalog()
-    catalogue['history_available'] = catalogue.ticker.isin(metrics.ticker.unique())
+    catalogue['history_available'] = catalogue.ticker.isin(get_session().metrics.ticker.unique())
     return catalogue
 
 
@@ -157,7 +169,7 @@ def write_report(result, output, *, plots=True, excel='full'):
     (output / 'README.txt').write_text(
         'ECR Backtest Studio\n\n'
         + workbook_note + chart_note +
-        'manifest.json: exact parameters, source hashes, code version and execution assumptions.\n'
+        'manifest.json: exact parameters, ecr source table hashes, code version and execution assumptions.\n'
         'config.json: replay with python main.py --config /path/to/config.json\n\n'
         'Review cadence checks the trigger; trades are conditional. Only breached sleeves are replaced.\n'
         'Ties prefer incumbents. A breached incumbent may stay if it still ranks highest.\n'

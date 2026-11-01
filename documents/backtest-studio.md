@@ -86,7 +86,7 @@ show daily values; only scheduled review observations can trigger replacements.
   Sortino and turnover alongside returns. More holdings alone does not guarantee
   lower drawdown.
 - **Eligibility:** custom universe filters now constrain initial and replacement
-  selection. Only F-series history is loaded; liquidity screens remain future work.
+  selection. Only funds with catalogue rows are selectable; liquidity screens remain future work.
 - **Portfolio policy:** equal initial capital and per-breach replacements are
   explicit assumptions. Weight caps, cash handling and forced full rebalancing
   would each require a distinct tested policy.
@@ -96,7 +96,8 @@ show daily values; only scheduled review observations can trigger replacements.
 
 ## Validation
 
-`python -m unittest discover -s tests` covers the engine's workbook regression,
+`python -m unittest discover -s tests` (requires `ECR_DB_URL`) covers the workbook score formulas,
+the engine's golden fingerprints on the ecr database,
 selection changes for single and multi-fund runs, independent trigger thresholds,
 calendar coverage, application preset changes/navigation, invalid configuration,
 and ZIP/Excel contents. Install `requirements-app.txt` to include the application

@@ -7,9 +7,9 @@ import time
 
 from backtesting.research import Experiment
 from config.identity import rule_fingerprint
-from config.settings import BacktestConfig, ScoreConfig
+from config.settings import BacktestConfig, ScoreConfig, outcome_score
 from config.spec import RunSpec
-from core.universe import BUFFER_BANDS, GROUPS, filter_catalog, load_catalog, validate_universe
+from core.universe import BUFFER_BANDS, filter_catalog, group_outcome, load_catalog, validate_universe
 from studio.archive import archive_root_path, default_archive_root, save_archive, save_report
 from studio.service import build_downloads, get_session, plan_cohort_windows, run_backtest, write_report
 
@@ -52,8 +52,10 @@ def add_common_arguments(parser, cohorts=('JAN',)):
 
 
 def add_universe_arguments(parser):
-    parser.add_argument('--group', choices=GROUPS, default='F series')
-    parser.add_argument('--outcome', choices=['Annual', 'Quarterly'])
+    parser.add_argument('--group', '--groups', type=csv_values, default=('F series',),
+                        help='One or more groups, combined: e.g. "Max Buffer,D series" or "Quarterly structures".')
+    parser.add_argument('--outcome', choices=['Annual', 'Quarterly'],
+                        help="Defaults to the groups' outcome type when they share one, else Annual.")
     parser.add_argument('--tickers', type=csv_values)
     parser.add_argument('--series', type=csv_values, default=())
     parser.add_argument('--strategies', type=csv_values, default=())
@@ -63,7 +65,7 @@ def add_universe_arguments(parser):
 
 
 def filters_from_args(args):
-    return {'group': args.group, 'outcome': args.outcome or ('Quarterly' if args.group == 'Quarterly structures' else 'Annual'),
+    return {'group': list(args.group), 'outcome': args.outcome,
             'tickers': args.tickers, 'series': args.series, 'strategies': args.strategies,
             'references': args.reference_assets, 'months': args.outcome_months, 'buffer_band': args.buffer_category}
 
@@ -77,8 +79,10 @@ def resolve_universe(filters, catalogue, available):
     if set(filters) - allowed:
         raise ValueError(f'Unknown universe filters: {sorted(set(filters)-allowed)}')
     options = {k: v for k, v in filters.items() if k not in ('name', 'tickers')}
-    if options.get('group') == 'Quarterly structures':
-        options.setdefault('outcome', 'Quarterly')
+    if options.get('outcome') is None:
+        options['outcome'] = group_outcome(catalogue, options.get('group', 'F series'))
+    if not isinstance(options.get('group', ''), (str, list, tuple)):
+        raise ValueError('group must be a group name or a list of them.')
     for key in ('series', 'strategies', 'references', 'months'):
         if key in options and not isinstance(options[key], (list, tuple)):
             raise ValueError(f'{key} must be a list.')
@@ -119,9 +123,7 @@ def make_case(name, filters, catalogue, available, base, n=3, metric='buffer_int
     settings = settings or {}
     if set(settings) - {field for _, field, _ in SETTING_DIMENSIONS}:
         raise ValueError(f'Unknown case settings: {sorted(settings)}')
-    score = ScoreConfig()
-    if selected.outcome_type.iloc[0] == 'Quarterly':
-        score = replace(score, period_center=45, period_width=18.75)
+    score = outcome_score(ScoreConfig(), selected.outcome_type.iloc[0])
     score = replace(score, **(score_overrides or {}))
     if rule == 'drop':
         trigger = dict(trigger='buffer_drop', buffer_metric=metric, buffer_drop=floor)
@@ -174,7 +176,8 @@ def grid_cases(grid, catalogue, available, base):
                                        score_overrides=overrides, settings=settings, **kwargs))
 
     for filters in grid['universes']:
-        universe_name = filters.get('name', filters.get('group', 'F series'))
+        group = filters.get('group', 'F series')
+        universe_name = filters.get('name', group if isinstance(group, str) else ' + '.join(group))
         if grid.get('include_single_ticker_reference', True):
             add(f'{universe_name} / Super Buffer reference / N=1 / ECR < 1.5 / monthly', filters, n=1, metric='ecr', floor=1.5)
         for n in grid['portfolio_sizes']:

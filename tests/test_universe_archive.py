@@ -10,10 +10,12 @@ from zipfile import ZipFile
 import numpy as np
 import pandas as pd
 
+import _ecr_db  # noqa: F401 (pins ECR_AS_OF before any data loads)
 from backtesting.engine import prepare_data, simulate
-from backtesting.data_pipeline import load_metric_collection
+from backtesting.data_pipeline import normalize_metrics
 from config.settings import BacktestConfig, ScoreConfig
-from core.universe import load_catalog, filter_catalog, validate_universe
+from core.universe import (COLUMNS, filter_catalog, group_options, group_outcome, load_catalog,
+                           validate_catalog, validate_universe)
 from studio.archive import save_archive, DEFAULT_ARCHIVE_ROOT
 from test_portfolio import portfolio_data
 from test_studio import wait_for_archive
@@ -31,12 +33,31 @@ def fixture_downloads():
 class UniverseTests(unittest.TestCase):
     def test_filters_use_metadata_and_have_one_compact_buffer_category(self):
         cat=load_catalog()
+        cat=cat.loc[cat.series=='F']  # the database may hold other series; the filters are checked on F
         self.assertEqual(len(filter_catalog(cat)),12)
         self.assertTrue(filter_catalog(cat,group='D series').empty)
         self.assertTrue(filter_catalog(cat,group='Quarterly structures',outcome='Quarterly').empty)
         self.assertEqual(filter_catalog(cat,months=['JAN','FEB'],references=['SPY'],buffer_band='Up to 10%').ticker.tolist(),['FJAN','FFEB'])
         self.assertTrue(filter_catalog(cat,buffer_band='Deferred protection').empty)
         self.assertTrue(filter_catalog(cat,strategies=['Deep Buffer']).empty)
+
+    def test_groups_combine_and_set_the_outcome_period(self):
+        rows=[('FJAN','F','Annual','JAN','Buffer',0,.1),('DJAN','D','Annual','JAN','Deep Buffer',.05,.3),
+              ('JANM','M','Annual','JAN','Max Buffer',0,1),('SQMX','QTR','Quarterly','Quarterly','Max Buffer',0,.13)]
+        cat=validate_catalog(pd.DataFrame([{'ticker':t,'series':s,'group':'US ETFs','outcome_type':o,'outcome_month':m,
+            'strategy':g,'buffer_start':a,'buffer_end':b,'reference_asset':'SPY','currency':'USD'} for t,s,o,m,g,a,b in rows])[COLUMNS])
+        self.assertEqual(group_options(cat),['D series','F series','M series','QTR series','Buffer','Deep Buffer','Max Buffer',
+                                             'Quarterly structures'])
+        self.assertEqual(filter_catalog(cat,['Max Buffer','D series']).ticker.tolist(),['DJAN','JANM'])
+        self.assertEqual(filter_catalog(cat,['Max Buffer','D series'],'Quarterly').ticker.tolist(),['SQMX'])
+        self.assertEqual(filter_catalog(cat,[]).ticker.tolist(),['FJAN','DJAN','JANM'])
+        self.assertEqual(filter_catalog(cat,'Quarterly structures','Quarterly').ticker.tolist(),['SQMX'])
+        self.assertEqual(group_outcome(cat,['D series','F series']),'Annual')
+        self.assertEqual(group_outcome(cat,['QTR series']),'Quarterly')
+        self.assertEqual(group_outcome(cat,['Max Buffer']),'Annual')
+        self.assertEqual(group_outcome(cat,['Max Buffer','Quarterly structures']),'Quarterly')
+        with self.assertRaisesRegex(ValueError,'Unknown universe group'):
+            filter_catalog(cat,['Z series','Gold'])
 
     def test_custom_universe_need_not_contain_launch_month_fund(self):
         metrics,bench,cycles=portfolio_data()
@@ -85,16 +106,12 @@ class UniverseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Currency conversion'):
             validate_universe(cat,['X123'],['X123'])
 
-    def test_supplemental_metric_files_are_validated_together(self):
+    def test_metric_rows_from_every_series_are_validated_together(self):
         frame=portfolio_data()[0]
-        with tempfile.TemporaryDirectory() as temp:
-            a,b=Path(temp)/'a.csv',Path(temp)/'b.csv'
-            frame.loc[frame.ticker=='FJAN'].to_csv(a,index=False)
-            frame.loc[frame.ticker!='FJAN'].to_csv(b,index=False)
-            combined=load_metric_collection([a,b])
-            self.assertEqual(len(combined),len(frame))
-            with self.assertRaisesRegex(ValueError,'Duplicate'):
-                load_metric_collection([a,a])
+        combined=normalize_metrics(pd.concat([frame.loc[frame.ticker=='FJAN'],frame.loc[frame.ticker!='FJAN']]))
+        self.assertEqual(len(combined),len(frame))
+        with self.assertRaisesRegex(ValueError,'Duplicate'):
+            normalize_metrics(pd.concat([frame,frame.loc[frame.ticker=='FJAN']]))
 
 
 class ArchiveTests(unittest.TestCase):
@@ -151,15 +168,23 @@ class StudioUniverseTests(unittest.TestCase):
         self.assertIn('min_holding_days', [widget.key for widget in app.number_input])
         self.assertEqual(app.selectbox(key='preset').options, ['Super Buffer', 'UCITS Conservative'])
         self.assertEqual(app.selectbox(key='lag').value,1)
-        app.selectbox(key='universe_group').select('Quarterly structures').run()
+        self.assertEqual(app.multiselect(key='universe_group').value,['F series'])
+        app.multiselect(key='universe_group').set_value(['Quarterly structures']).run()
         self.assertFalse(app.exception)
+        self.assertEqual(app.selectbox(key='universe_outcome').value,'Quarterly')
         self.assertEqual(app.number_input(key='score_period_center').value,45.)
         self.assertEqual(app.number_input(key='score_period_width').value,18.75)
         self.assertEqual(app.number_input(key='score_sigma_down').value,.07)
-        self.assertTrue(app.button[0].disabled)
-        app.selectbox(key='universe_group').select('D series').run()
-        self.assertTrue(app.button[0].disabled)
-        app.selectbox(key='universe_group').select('Custom universe').run()
+        catalogue=load_catalog().set_index('ticker')
+        offered=app.multiselect(key='selected_tickers').value
+        self.assertTrue(offered)
+        self.assertTrue(catalogue.loc[offered,'outcome_type'].eq('Quarterly').all())
+        app.multiselect(key='universe_group').set_value(['Max Buffer','D series']).run()
+        self.assertEqual(app.selectbox(key='universe_outcome').value,'Annual')
+        self.assertEqual(app.number_input(key='score_period_center').value,180.)
+        offered=catalogue.loc[app.multiselect(key='selected_tickers').value]
+        self.assertTrue((offered.strategy.eq('Max Buffer')|offered.series.eq('D')).all())
+        app.multiselect(key='universe_group').set_value([]).run()
         app.multiselect(key='selected_tickers').set_value(['FFEB','FMAR']).run()
         self.assertFalse(app.button[0].disabled)
         app.selectbox(key='cadence').select('quarterly').run()

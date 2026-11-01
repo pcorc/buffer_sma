@@ -2,11 +2,20 @@
 
 ## What is available now
 
-Only the 12 annual F-series funds have history in this repository. They remain
-the default. The Studio's other group choices are ready for metadata and data,
-but never substitute F-series observations when a selected group has no history.
+`ecr.fund_catalog` lists every fund family with history: F, D (Deep Buffer), G (Moderate),
+X (Enhance & Moderate), M (Max Buffer), Q/QC/QM (Nasdaq-100), RS (equal weight), S (small
+cap), T (emerging markets), Y (international), XI (premium income), DL/DQ (dual directional)
+and QTR (the quarterly funds BGLD, DHDG, FHDG, QQBF, SQBA, SQMX). The annual F series is the
+default. A fund is selectable once it has rows in both `ecr.fund_catalog` and
+`ecr.website_metrics`; a fund the engine cannot score (no buffer/cap inputs) is never bought.
 
-The universe section offers a group, annual/quarterly outcome period, optional
+**Fund groups** combine freely: pick any families ("D series"), strategies ("Max Buffer")
+and "Quarterly structures"; funds in any selected group are included, and no group means
+every fund. The groups set the outcome period: Quarterly for "Quarterly structures" or
+all-quarterly groups, otherwise Annual. Max Buffer + D series is therefore the 24 annual
+ladder funds; choose Quarterly afterwards to see SQMX alone.
+
+The universe section offers fund groups, annual/quarterly outcome period, optional
 series/strategy/reference-asset/outcome-month filters, and one broad buffer
 category. The exact ticker list is editable after filtering. An empty list or a
 portfolio larger than the list cannot run. Initial selection and every subsequent
@@ -23,13 +32,13 @@ review cadence does not change these scoring values or a product's outcome term.
 
 ## Add future funds
 
-1. Add metadata rows to `input_data/fund_catalog.csv`. Required columns:
+1. Insert metadata rows into `ecr.fund_catalog`. Columns:
 
    | Field | Meaning |
    | --- | --- |
    | ticker | Unique uppercase symbol, without whitespace |
    | series | Actual product family, e.g. F, D or G; not inferred from ticker |
-   | group | Classification, e.g. US ETFs or UCITS |
+   | fund_group | Classification, e.g. US ETFs or UCITS (shown as `group` in the app) |
    | outcome_type | Annual or Quarterly |
    | outcome_month | JAN through DEC, or Quarterly |
    | strategy | Buffer, Deep Buffer, Moderate Buffer, etc. |
@@ -43,26 +52,27 @@ review cadence does not change these scoring values or a product's outcome term.
    eligible: it must also have history. The broad filter categories are immediate
    protection up to 10%, above 10–20%, above 20%, and deferred protection.
 
-2. Put normalized histories into `input_data/fund_metrics/*.csv`. Required columns:
-   `ticker`, `date`, `fund_value`, `reference_asset_return`,
-   `remaining_outcome_days`, `remaining_cap_net`, `remaining_buffer_net`,
-   `downside_before_buffer_net`, `fund_cap_net`, `buffer_net`.
-   Percentages are decimal fractions; dates should use ISO format. Returns since
-   reset and remaining days must reflect the actual fund's own outcome cycle.
-   Duplicate ticker/date rows across files are rejected; files can extend histories
-   but cannot overlap existing rows. Invalid held NAVs still fail rather than
-   being filled. Initial allocation needs enough eligible funds and, under
-   next-close execution, a preceding signal session.
+2. Insert daily histories into `ecr.website_metrics`. The engine reads `ticker`,
+   `date`, `fund_value`, `reference_asset_return`, `remaining_outcome_days`,
+   `remaining_cap_net`, `remaining_buffer_net`, `downside_before_buffer_net`,
+   `fund_cap_net` and `buffer_net`. Percentages are decimal fractions in `DOUBLE`
+   columns. Returns since reset and remaining days must reflect the actual fund's
+   own outcome cycle. The primary key rejects duplicate ticker/date rows. Every
+   row is validated on load, so one bad row (missing or non-positive NAV, missing
+   date) stops every run until it is fixed. Initial allocation needs enough
+   eligible funds and, under next-close execution, a preceding signal session.
 
-3. Restart/reload the Studio. Cache signatures include catalogue and supplemental
-   files. New groups become usable when history is available. The current app
-   requires USD NAVs because benchmark comparisons use USD. Other currencies
-   require a deliberate conversion/benchmark policy before running; this version
-   does not invent FX returns. The supplied investment-launch/review calendar is
-   still the holiday-adjusted monthly roll calendar in `roll_dates.csv`; review
-   that convention when integrating a product with different trading calendars.
+3. The Studio notices table changes within 30 seconds (`ECR_SIGNATURE_TTL`) and
+   reloads. New groups become usable when history is
+   available. The current app requires USD NAVs because benchmark comparisons use
+   USD. Other currencies require a deliberate conversion/benchmark policy before
+   running; this version does not invent FX returns. The investment-launch/review
+   calendar is still the holiday-adjusted monthly roll calendar in `ecr.roll_dates`;
+   review that convention when integrating a product with different trading
+   calendars. Benchmarks are aligned to fund dates, so `ecr.benchmark_prices` must
+   cover any later history.
 
-The default CLI dataset also loads supplemental CSVs. Exported configurations
+The CLI loads the same tables. Exported configurations
 contain explicit ticker lists, so replay does not silently expand when new funds
 are added. Example:
 

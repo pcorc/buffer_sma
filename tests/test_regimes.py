@@ -56,13 +56,13 @@ class RegimeTests(unittest.TestCase):
         frame=pd.DataFrame({'simple':self.nav,'limited':self.nav*2})
         summary=pd.DataFrame([{'Experiment':name,'Cohort':'Jan','Start':frame.index[0],'End':frame.index[-1],**nav_metrics(frame[name])} for name in frame])
         with tempfile.TemporaryDirectory() as temp:
-            path=Path(temp)/'comparison.xlsx'
+            path=Path(temp)
             def write():
-                with pd.ExcelWriter(path,engine='openpyxl') as w:
-                    configs.to_excel(w,sheet_name='Configurations',index=False)
-                    summary.to_excel(w,sheet_name='Launch Cohorts',index=False)
-                    summary.to_excel(w,sheet_name='Comparison',index=False)
-                    frame.to_excel(w,sheet_name='NAV Jan')
+                configs.to_csv(path/'configurations.csv',index=False)
+                summary.to_csv(path/'cohort_comparison.csv',index=False)
+                summary.to_csv(path/'comparison.csv',index=False)
+                frame.rename_axis('Date').to_csv(path/'nav_Jan.csv')
+            with self.assertRaisesRegex(ValueError,'not a conservative batch'):load_export(path)
             write()
             selected,curves,audit,_=load_export(path)
             self.assertEqual(selected.Experiment.tolist(),['simple'])

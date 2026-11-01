@@ -1,9 +1,11 @@
 """Explicit, serializable parameters for the Website Metrics AR model."""
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import math
 
 MONTHS = ('JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
           'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC')
+# Quarterly outcome products keep the annual timing curve, scaled from a 360- to a 90-day period.
+QUARTERLY_TIMING = {'period_center': 45., 'period_width': 18.75}
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,12 @@ class ScoreConfig:
             if getattr(self, name) <= 0:
                 raise ValueError(f'{name} must be positive')
 
+
+
+
+def outcome_score(score, outcome):
+    """The score profile for an outcome type: quarterly products use the quarterly timing curve."""
+    return replace(score, **QUARTERLY_TIMING) if outcome == 'Quarterly' else score
 
 
 @dataclass(frozen=True)

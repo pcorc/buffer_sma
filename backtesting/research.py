@@ -1,5 +1,6 @@
 """Reusable in-memory research sessions. Loading and scoring are not repeated per trigger."""
 from collections import OrderedDict
+import copy
 import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -8,7 +9,6 @@ import time
 
 import pandas as pd
 
-from backtesting.data_pipeline import file_hash, load_benchmarks, load_cycles, load_metric_collection
 from backtesting.engine import plan_cohort_windows, prepare_data, simulate
 from config.settings import BacktestConfig, ScoreConfig
 
@@ -21,22 +21,25 @@ class Experiment:
 
 
 class ResearchSession:
-    """Load a dataset once; retain up to eight score panels for parameter experiments.
+    """Hold one loaded dataset; retain up to eight score panels for parameter experiments.
 
-    Instantiate a new session after changing source files. Results are newly simulated
-    each time; callers should treat the cached prepared data as read-only.
+    Build it with from_source() (the ecr database) or from in-memory frames. Results are newly
+    simulated each time; callers should treat the cached prepared data as read-only.
     """
-    def __init__(self, metrics, benchmarks, cycles, supplemental_metrics=()):
-        paths = {'metrics': Path(metrics), 'benchmarks': Path(benchmarks), 'cycles': Path(cycles)}
-        self.sources = {k: {'path': str(p.resolve()), 'sha256': file_hash(p)} for k, p in paths.items()}
-        self.sources['supplemental_metrics'] = [
-            {'path': str(Path(p).resolve()), 'sha256': file_hash(p)} for p in supplemental_metrics]
-        self.metrics = load_metric_collection([metrics, *supplemental_metrics])
-        self.benchmarks = load_benchmarks(benchmarks)
-        self.cycles = load_cycles(cycles)
+    def __init__(self, metrics, benchmarks, cycles, sources=None):
+        self.sources = copy.deepcopy(sources or {})
+        self.metrics = metrics
+        self.benchmarks = benchmarks
+        self.cycles = cycles
         self._prepared = OrderedDict()
         self._lock = threading.Lock()
         self.score_builds = 0
+
+    @classmethod
+    def from_source(cls, as_of=None):
+        from backtesting.ecr_source import load_bundle
+        bundle = load_bundle(as_of)
+        return cls(bundle.metrics, bundle.benchmarks, bundle.cycles, bundle.sources)
 
     def prepare(self, config=ScoreConfig(), universe=None):
         # prepare_data sorts tickers, so universe order must not create a second panel.
@@ -58,7 +61,7 @@ class ResearchSession:
         prepared = time.perf_counter()
         result = simulate(data, backtest)
         result['timings'] = {'prepare_seconds': prepared-t, 'simulate_seconds': time.perf_counter()-prepared}
-        result['sources'] = self.sources
+        result['sources'] = copy.deepcopy(self.sources)
         return result
 
     def compare(self, experiments):

@@ -145,8 +145,10 @@ weight bands can increase turnover versus letting weights drift indefinitely.
 
 The single-run script supports the same filters as the UI: `--group`, `--outcome`,
 `--series`, `--strategies`, `--reference-assets`, `--outcome-months`,
-`--buffer-category`, and `--tickers`. Comma-separated filters are intersected;
-explicit tickers must match those filters. For example:
+`--buffer-category`, and `--tickers`. `--group` takes one or more comma-separated groups,
+which are combined (e.g. `--group "Max Buffer,D series"`); the other filters then narrow
+that set, and explicit tickers must match them. `--outcome` defaults to the groups'
+outcome period. For example:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/run_conservative_iteration.py --group "F series" --reference-assets SPY --buffer-category "Up to 10%" --tickers FJAN,FFEB,FMAR,FAPR,FMAY
@@ -168,7 +170,9 @@ Each item in `universes` accepts these keys (lists for multi-value filters):
 }
 ```
 
-An optional `tickers` list narrows this further. Multiple universe definitions
+`group` may also be a list, combined as in the Studio: `"group": ["Max Buffer", "D series"]`
+(see `config/conservative-maxbuffer-deep.json`). Omit `outcome` to use the groups' outcome
+period. An optional `tickers` list narrows this further. Multiple universe definitions
 are crossed with the entire scenario matrix. Duplicate scenarios are rejected.
 New portfolio sizes require matching `turnover_budget_by_size` entries where
 that profile is used. Cadences also support `semiannual` and `annual`; triggers
@@ -176,8 +180,7 @@ also support `cap_integrity`. ECR thresholds can include 1.0 and 2.0. The grid
 keeps selection fixed to highest ECR so the trigger comparisons stay focused.
 
 Only real loaded histories are used. D/G, UCITS and quarterly universes become
-available after their catalogue entries and normalized CSVs are added to
-`input_data/fund_metrics/`. See [universes and archives](universes-and-archives.md).
+available once their rows are in `ecr.fund_catalog` and `ecr.website_metrics`. See [universes and archives](universes-and-archives.md).
 Metadata alone does not create runnable history. The current F-series backtests
 are strategy research for the conservative client, not tests of UCITS fund data.
 

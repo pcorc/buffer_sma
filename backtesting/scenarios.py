@@ -2,7 +2,7 @@
 from dataclasses import replace
 
 from backtesting.research import Experiment
-from config.settings import BacktestConfig, ScoreConfig
+from config.settings import BacktestConfig, ScoreConfig, outcome_score
 
 
 def conservative_suite(backtest=None):
@@ -48,6 +48,6 @@ def quarterly_score_hypotheses():
     Half-width sigmas assume square-root-of-time return dispersion. Real calibration
     must use quarterly fund NAV, cap, buffer, returns-since-reset and outcome dates.
     """
-    relative_period = replace(ScoreConfig(),period_center=45,period_width=18.75)
+    relative_period = outcome_score(ScoreConfig(),'Quarterly')
     return {'quarterly_same_return_tolerance': relative_period,
             'quarterly_half_return_tolerance': replace(relative_period,sigma_down=.035,sigma_up=.025)}

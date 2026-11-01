@@ -86,6 +86,10 @@ def main(argv=None, *, default_grid=DEFAULT_GRID):
                 name = case.experiment.name
                 print(f'[{i}/{len(cases)}] {name}',flush=True)
                 result, folder = outcome.result() if pool else outcome
+                drifted = sorted(k for k, v in session.sources.items()
+                                 if isinstance(v, dict) and result['sources'].get(k, {}).get('sha256') != v.get('sha256'))
+                if drifted:
+                    raise ValueError(f'The ecr tables changed during the batch ({", ".join(drifted)}); rerun it.')
                 results[name] = result
                 folders[name] = folder
                 status['completed'].append({'name':name,'folder':folder.relative_to(output).as_posix(),

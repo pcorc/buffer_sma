@@ -6,13 +6,13 @@ import time
 import pandas as pd
 import streamlit as st
 
-from core.universe import GROUPS, STRATEGIES, BUFFER_BANDS, filter_catalog, validate_universe
+from core.universe import STRATEGIES, BUFFER_BANDS, filter_catalog, group_options, group_outcome, validate_universe
 from studio.archive import default_archive_root, save_archive
-from config.settings import MONTHS, ScoreConfig
+from config.settings import MONTHS, QUARTERLY_TIMING, ScoreConfig, outcome_score
 from config.spec import RunSpec
 from studio.fields import HOLD_BENCHMARKS, TRIGGER_RULES, config_from_state, state_from_config, state_keys
 from studio.service import (CADENCES, METRICS, SELECTIONS, SCHEDULE_NOTES, build_downloads, config_json, describe_rule,
-                            get_session, load_preset, plan_cohort_windows, run_backtest, source_mismatches,
+                            get_session, input_changes, load_preset, plan_cohort_windows, run_backtest,
                             source_signature, available_catalogue)
 from visualization.research_plots import dashboard, holdings_figure
 
@@ -57,17 +57,19 @@ def archive_report(result, root, run_name):
 
 
 def apply_outcome_profile():
-    quarterly = st.session_state.universe_outcome == 'Quarterly'
-    st.session_state.score_period_center = 45. if quarterly else 180.
-    st.session_state.score_period_width = 18.75 if quarterly else 75.
+    score = outcome_score(ScoreConfig(), st.session_state.universe_outcome)
+    st.session_state.score_period_center = score.period_center
+    st.session_state.score_period_width = score.period_width
 
 
 def apply_universe_group():
-    group = st.session_state.universe_group
-    if group == 'Quarterly structures':
-        st.session_state.universe_outcome = 'Quarterly'
-    elif group.endswith(' series'):
-        st.session_state.universe_outcome = 'Annual'
+    # The chosen groups set the outcome period; it can still be changed afterwards.
+    try:
+        outcome = group_outcome(catalogue_for_ui(source_signature()), st.session_state.universe_group)
+    except (ValueError, OSError):
+        outcome = None
+    if outcome:
+        st.session_state.universe_outcome = outcome
     apply_outcome_profile()
 
 
@@ -96,10 +98,22 @@ def load_uploaded_config():
     st.session_state.update(state_from_config(spec.score, spec.backtest, window=True))
     if spec.backtest.universe is not None:
         # Restore the exact fund list; the universe section applies it after its filters reset.
-        st.session_state.update({'universe_group': 'Custom universe', 'fund_series': [], 'fund_strategies': [],
+        st.session_state.update({'universe_group': [], 'fund_series': [], 'fund_strategies': [],
                                  'fund_references': [], 'fund_months': [], 'buffer_band': 'All buffers',
                                  '_pending_tickers': list(spec.backtest.universe)})
-    changed = source_mismatches(spec.provenance.get('sources'))
+        try:
+            catalogue = catalogue_for_ui(source_signature())
+            outcomes = set(catalogue.loc[catalogue.ticker.isin(spec.backtest.universe), 'outcome_type'])
+        except (ValueError, OSError):
+            outcomes = set()
+        if len(outcomes) == 1:
+            st.session_state.universe_outcome = outcomes.pop()
+    try:
+        changed = input_changes(spec)
+    except (ValueError, OSError) as exc:
+        st.session_state['_upload_message'] = ('warning', f'Loaded {upload.name}, but its inputs could not be '
+                                               f'checked against the ecr database: {exc}')
+        return
     if changed:
         st.session_state['_upload_message'] = ('warning', f'Loaded {upload.name}, but these inputs have changed since it ran: '
                                                f'{", ".join(changed)}. Results will differ from the original run.')
@@ -115,7 +129,9 @@ if st.session_state.get('preset') not in CLIENT_PRESETS:
 for key, value in state_from_config(*load_preset(PRESET_FILES['Super Buffer'])).items():
     st.session_state.setdefault(key, value)
 
-st.session_state.setdefault('universe_group', 'F series')
+st.session_state.setdefault('universe_group', ['F series'])
+if isinstance(st.session_state.universe_group, str):  # sessions from before groups could be combined
+    st.session_state.universe_group = [] if st.session_state.universe_group == 'Custom universe' else [st.session_state.universe_group]
 st.session_state.setdefault('universe_outcome', 'Annual')
 st.session_state.setdefault('archive_root', default_archive_root())
 st.session_state.setdefault('archive_enabled', True)
@@ -236,27 +252,35 @@ st.caption('Start with the fund universe, then follow the numbered strategy card
 
 with st.container(border=True):
     st.subheader('Fund universe')
-    st.caption('1 · Choose a fund group and outcome period.  2 · Narrow the filters.  3 · Confirm the funds included.')
-    a, b = st.columns(2)
-    a.selectbox('Fund group', GROUPS, key='universe_group', on_change=apply_universe_group)
-    outcome = b.selectbox('Outcome period', ['Annual','Quarterly'], key='universe_outcome', on_change=apply_outcome_profile)
+    st.caption('1 · Choose one or more fund groups and the outcome period.  2 · Narrow the filters.  3 · Confirm the funds included.')
     try:
         catalogue = catalogue_for_ui(source_signature())
     except (ValueError, OSError) as error:
         st.error(f'Unable to load the fund catalogue: {error}')
         st.stop()
+    groups = group_options(catalogue)
+    st.session_state.universe_group = [g for g in st.session_state.universe_group if g in groups]
+    a, b = st.columns([3, 1])
+    a.multiselect('Fund groups', groups, key='universe_group', on_change=apply_universe_group,
+                  placeholder='All funds (no group filter)',
+                  help='Combine any families ("D series"), strategies ("Max Buffer") and Quarterly structures. '
+                       'Funds in any selected group are included.')
+    outcome = b.selectbox('Outcome period', ['Annual','Quarterly'], key='universe_outcome', on_change=apply_outcome_profile,
+                          help='Annual and quarterly products run separately. Quarterly uses the quarterly timing curve.')
     with st.expander('Filter funds · series, strategy, reference asset and buffer'):
         a,b,c = st.columns(3)
-        series = a.multiselect('Fund series', sorted(set(['F','D','G','S','Y','Q','B']) | set(catalogue.series)), key='fund_series', placeholder='All series')
+        for key, column in (('fund_series', 'series'), ('fund_references', 'reference_asset')):
+            st.session_state[key] = [v for v in st.session_state.get(key, []) if v in set(catalogue[column])]
+        series = a.multiselect('Fund series', sorted(set(catalogue.series) - {''}), key='fund_series', placeholder='All series')
         strategies = b.multiselect('Strategy', sorted(set(STRATEGIES) | set(catalogue.strategy)), key='fund_strategies', placeholder='All strategies')
-        references = c.multiselect('Reference asset', sorted(set(['EEM','EFA','GLD','IWM','QQQ','RSP','SPY']) | set(catalogue.reference_asset)), key='fund_references', placeholder='All reference assets')
+        references = c.multiselect('Reference asset', sorted(set(catalogue.reference_asset) - {''}), key='fund_references', placeholder='All reference assets')
         months = a.multiselect('Fund outcome month', [*MONTHS,'Quarterly'], key='fund_months', placeholder='All outcome months', help='Filters fund products. This is separate from the backtest launch month below.')
         buffer_band = b.selectbox('Buffer category', BUFFER_BANDS, key='buffer_band')
         c.caption('One broad buffer category keeps the list short. Exact ranges stay in the fund catalogue.')
     matches = filter_catalog(catalogue, st.session_state.universe_group, outcome, series, strategies, references, months, buffer_band)
     ready = matches.loc[matches.history_available]
     matching_tickers = tuple(sorted(ready.ticker))
-    filter_identity = (st.session_state.universe_group, outcome, tuple(series), tuple(strategies), tuple(references), tuple(months), buffer_band, matching_tickers)
+    filter_identity = (tuple(st.session_state.universe_group), outcome, tuple(series), tuple(strategies), tuple(references), tuple(months), buffer_band, matching_tickers)
     if st.session_state.get('_universe_filter') != filter_identity:
         st.session_state.selected_tickers = list(matching_tickers)
         st.session_state['_universe_filter'] = filter_identity
@@ -268,7 +292,7 @@ with st.container(border=True):
             st.warning(f'Not loaded here, so left out of the universe: {", ".join(unavailable)}.')
     selected_tickers = st.multiselect('Funds included in this backtest', matching_tickers, key='selected_tickers', placeholder='No available funds match these filters')
     if not matching_tickers:
-        st.info('No historical data is loaded for this selection yet. F-series annual funds are available now; other groups will become runnable when their catalogue records and history are added.')
+        st.info('No historical data is loaded for this selection yet. Funds become runnable once they have rows in both ecr.fund_catalog and ecr.website_metrics.')
     else:
         st.caption(f'{len(selected_tickers)} funds selected. Initial purchases and replacements are both restricted to this list.')
     with st.expander('View matching fund details'):
@@ -442,8 +466,8 @@ with main:
         with timing:
             st.subheader('P · Outcome-period position')
             st.caption('A small additive bonus centered within the outcome period. These values describe the product, independently of the review cadence.')
-            st.table(pd.DataFrame({'Outcome profile': ['Annual', 'Quarterly'], 'Peak days remaining': [180.,45.], 'Timing width (days)': [75.,18.75], 'Reset tolerance (down / up)': ['0.07 / 0.05','0.07 / 0.05']}))
-            st.caption('Quarterly timing is a proportional research setting; it still needs quarterly fund history for evaluation.')
+            st.table(pd.DataFrame({'Outcome profile': ['Annual', 'Quarterly'], 'Peak days remaining': [ScoreConfig().period_center, QUARTERLY_TIMING['period_center']], 'Timing width (days)': [ScoreConfig().period_width, QUARTERLY_TIMING['period_width']], 'Reset tolerance (down / up)': ['0.07 / 0.05','0.07 / 0.05']}))
+            st.caption('Quarterly timing is a proportional research setting: the annual curve scaled to a 90-day outcome period.')
             st.info(f'Active profile: {outcome}. Changing the universe outcome period restores its timing defaults.')
             a, b, c = st.columns(3)
             score_field(a, 'period_bonus', 'Period-position bonus')

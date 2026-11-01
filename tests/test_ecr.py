@@ -1,4 +1,4 @@
-"""Excel expectations are cached workbook values, independent of Python scoring."""
+"""Score formulas against the methodology workbook's cached values; runs on the ecr database."""
 from dataclasses import replace
 from pathlib import Path
 import tempfile
@@ -7,10 +7,12 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from backtesting.data_pipeline import load_metrics, load_benchmarks, load_cycles
-from backtesting.engine import DIAGNOSTIC_COLUMNS, prepare_data, simulate, threshold_fires
-from config.settings import BacktestConfig, ScoreConfig
-from core.scoring import COMPONENTS, score_funds
+import _ecr_db  # noqa: F401 (pins ECR_AS_OF before any data loads)
+from backtesting.data_pipeline import normalize_metrics
+from backtesting.ecr_source import load_bundle
+from backtesting.engine import DIAGNOSTIC_COLUMNS, DIAGNOSTIC_MAP, prepare_data, simulate, threshold_fires
+from config.settings import BacktestConfig, ScoreConfig, outcome_score
+from core.scoring import COMPONENTS, score_funds, score_outcomes
 from utils.exporters import export_results
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +41,13 @@ class ScoreTests(unittest.TestCase):
         np.testing.assert_allclose(actual[list(COMPONENTS)], frame[list(COMPONENTS)], rtol=0, atol=1e-12)
         self.assertTrue(actual.score_valid.all())
         pd.testing.assert_frame_equal(frame, before)
+
+    def test_quarterly_rows_use_the_quarterly_timing_curve(self):
+        frame = example_data()[0].iloc[:4].copy()
+        quarterly = [False, True, False, True]
+        actual = score_outcomes(frame, quarterly)
+        pd.testing.assert_frame_equal(actual.iloc[[0, 2]], score_funds(frame.iloc[[0, 2]]))
+        pd.testing.assert_frame_equal(actual.iloc[[1, 3]], score_funds(frame.iloc[[1, 3]], outcome_score(ScoreConfig(), 'Quarterly')))
 
     def test_asymmetry_and_period_peak(self):
         frame = example_data()[0].iloc[:3].copy()
@@ -175,23 +184,26 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(len({x['strategy_id'] for x in (a, b, c)}), 3)
 
 
-class WorkbookRegressionTests(unittest.TestCase):
+class DatabaseRegressionTests(unittest.TestCase):
+    """The default workbook model on the ecr database; golden_hashes.json pins its exact economics."""
     @classmethod
     def setUpClass(cls):
-        cls.data = prepare_data(load_metrics(ROOT / 'input_data/website_metrics.csv'),
-                                load_benchmarks(ROOT / 'input_data/benchmark_ts.csv'),
-                                load_cycles(ROOT / 'input_data/roll_dates.csv'))
+        bundle = load_bundle()
+        cls.data = prepare_data(bundle.metrics, bundle.benchmarks, bundle.cycles)
         cls.result = simulate(cls.data)
 
-    def test_all_166_generated_events_match_excel(self):
-        expected = pd.read_csv(ROOT / 'tests/fixtures/diagnostics_golden.csv', parse_dates=['Date']).rename(columns={'ECR 2.0': 'ECR'})
-        actual = self.result['diagnostics'][DIAGNOSTIC_COLUMNS].reset_index(drop=True)
-        self.assertEqual(len(actual), 166)
-        pd.testing.assert_frame_equal(actual, expected, check_dtype=False, atol=1e-12, rtol=0)
+    def test_every_event_snapshots_the_loaded_inputs_and_scores(self):
+        diagnostics = self.result['diagnostics']
+        self.assertGreater(len(diagnostics), 0)
+        self.assertEqual(list(diagnostics.columns[:len(DIAGNOSTIC_COLUMNS)]), DIAGNOSTIC_COLUMNS)
+        rows = self.data.rows.loc[list(zip(diagnostics.Date, diagnostics.Fund))]
+        for column, source in DIAGNOSTIC_MAP.items():
+            np.testing.assert_array_equal(diagnostics[column].to_numpy(dtype=float), rows[source].to_numpy(dtype=float),
+                                          err_msg=column)
 
     def test_all_cohorts_and_candidates_have_provenance(self):
         self.assertEqual(len(self.result['summary']), 12)
-        self.assertEqual(self.result['diagnostics']['Event ID'].nunique(), 166)
+        self.assertEqual(self.result['diagnostics']['Event ID'].nunique(), len(self.result['diagnostics']))
         candidates = self.result['candidates']
         self.assertTrue(candidates.loc[candidates.Eligible, 'Reset Prox.'].notna().all())
         self.assertFalse(candidates.loc[candidates['Reset Prox.'].isna(), 'Eligible'].any())
@@ -209,26 +221,27 @@ class WorkbookRegressionTests(unittest.TestCase):
             output = Path(directory) / 'run'
             export_results(self.result, output, self.result['parameters'], plots=False)
             actual = pd.read_excel(output / 'ecr_results.xlsx', sheet_name='ECR Diagnostics')
-            self.assertEqual(len(actual), 166)
+            self.assertEqual(len(actual), len(self.result['diagnostics']))
             self.assertTrue((output / 'manifest.json').is_file())
             with self.assertRaises(FileExistsError):
                 export_results(self.result, output, {}, plots=False)
 
 
 class AdapterTests(unittest.TestCase):
-    def test_percentage_csv_is_converted_once(self):
-        actual = load_metrics(ROOT / 'input_data/data.csv')
-        jan = actual.loc[(actual.ticker == 'FJAN') & (actual.date == '2021-01-19')].iloc[0]
+    def test_percentage_headers_are_converted_once(self):
+        # The original percentage-point export (data.csv), FJAN on 2021-01-19.
+        row = {'Date': '1/19/2021', 'Fund': 'FJAN', 'Fund Value (USD)': 30.28, 'Reference Asset Return (%)': .79,
+               'Remaining Outcome Days': 367, 'Remaining Cap Net (%)': 12.93, 'Remaining Buffer Net (%)': 9.22,
+               'Downside Before Buffer Net (%)': -1.48, 'Original Cap Net (%)': 13.64, 'Original Buffer Net (%)': 9.14}
+        actual = normalize_metrics(pd.DataFrame([row]))
+        jan = actual.iloc[0]
         self.assertAlmostEqual(jan.reference_asset_return, .0079)
         self.assertAlmostEqual(jan.remaining_cap_net, .1293)
 
     def test_duplicate_keys_are_rejected(self):
         frame = example_data()[0]
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'bad.csv'
-            pd.concat([frame, frame.iloc[:1]]).to_csv(path, index=False)
-            with self.assertRaisesRegex(ValueError, 'Duplicate'):
-                load_metrics(path)
+        with self.assertRaisesRegex(ValueError, 'Duplicate'):
+            normalize_metrics(pd.concat([frame, frame.iloc[:1]]))
 
 
 if __name__ == '__main__':

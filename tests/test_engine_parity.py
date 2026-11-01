@@ -5,6 +5,7 @@ import unittest
 
 import pandas as pd
 
+import _ecr_db  # noqa: F401 (pins ECR_AS_OF before any data loads)
 from backtesting.portfolio import simulate_portfolio
 from backtesting.engine import simulate
 from config.settings import BacktestConfig, MONTHS, ScoreConfig

@@ -1,13 +1,11 @@
-"""Fund metadata and filters, separate from historical scoring inputs."""
-from pathlib import Path
+"""Fund metadata (ecr.fund_catalog) and filters, separate from historical scoring inputs."""
+import numpy as np
 import pandas as pd
 
 from config.settings import MONTHS
 
-ROOT = Path(__file__).resolve().parents[1]
-CATALOG_PATH = ROOT / 'input_data/fund_catalog.csv'
-EXTRA_METRICS = ROOT / 'input_data/fund_metrics'
-GROUPS = ['F series', 'D series', 'G series', 'UCITS', 'Quarterly structures', 'Custom universe']
+# Groups that cut across families; every catalogue family ('F series') and strategy is a group too.
+SPECIAL_GROUPS = ['Quarterly structures', 'UCITS']
 STRATEGIES = ['Buffer', 'Buffer & Digital Return', 'Buffer and Premium Income', 'Conservative Buffer',
               'Deep Buffer', 'Dual Directional Buffer', 'Enhance & Moderate Buffer', 'Max Buffer', 'Moderate Buffer']
 BUFFER_BANDS = ['All buffers', 'Up to 10%', 'Above 10% to 20%', 'Above 20%', 'Deferred protection']
@@ -15,8 +13,13 @@ COLUMNS = ['ticker','series','group','outcome_type','outcome_month','strategy','
            'buffer_end','reference_asset','currency']
 
 
-def load_catalog(path=CATALOG_PATH):
-    catalog = pd.read_csv(path, keep_default_na=False)
+def load_catalog():
+    """The validated ecr.fund_catalog, from the same database snapshot as the loaded metrics."""
+    from backtesting.ecr_source import load_bundle
+    return validate_catalog(load_bundle().catalog.copy())
+
+
+def validate_catalog(catalog):
     if set(COLUMNS) - set(catalog):
         raise ValueError(f'Fund catalogue needs columns: {COLUMNS}')
     if catalog.ticker.duplicated().any() or catalog.ticker.eq('').any():
@@ -34,17 +37,49 @@ def load_catalog(path=CATALOG_PATH):
     return catalog[COLUMNS]
 
 
+def group_options(catalog):
+    """Selectable groups: each product family ('D series'), each strategy ('Max Buffer'), then the special groups."""
+    families = [f'{s} series' for s in sorted(set(catalog.series) - {''})]
+    special = [g for g in SPECIAL_GROUPS if g != 'UCITS' or (catalog.group == 'UCITS').any()]
+    return families + sorted(set(catalog.strategy) - {''}) + special
+
+
+def group_mask(catalog, group):
+    if group == 'Custom universe':
+        return pd.Series(True, index=catalog.index)
+    if group.endswith(' series'):
+        return catalog.series == group[:-len(' series')]
+    if group == 'UCITS':
+        return catalog.group == 'UCITS'
+    if group == 'Quarterly structures':
+        return catalog.outcome_type == 'Quarterly'
+    if group in set(STRATEGIES) | set(catalog.strategy):
+        return catalog.strategy == group
+    raise ValueError(f'Unknown universe group: {group}')
+
+
+def groups_mask(catalog, group):
+    """One group name or a list of them (their union); an empty list means every fund."""
+    groups = [group] if isinstance(group, str) else list(group)
+    if not groups:
+        return pd.Series(True, index=catalog.index)
+    return pd.Series(np.logical_or.reduce([group_mask(catalog, g).to_numpy() for g in groups]), index=catalog.index)
+
+
+def group_outcome(catalog, group):
+    """The outcome period the groups imply: Quarterly for 'Quarterly structures' or all-quarterly groups, else
+    Annual (e.g. 'Max Buffer' is mostly annual ladders plus one quarterly fund)."""
+    groups = [group] if isinstance(group, str) else list(group)
+    if 'Quarterly structures' in groups:
+        return 'Quarterly'
+    outcomes = set(catalog.loc[groups_mask(catalog, groups), 'outcome_type'])
+    return 'Quarterly' if outcomes == {'Quarterly'} else 'Annual'
+
+
 def filter_catalog(catalog, group='F series', outcome='Annual', series=(), strategies=(),
                    references=(), months=(), buffer_band='All buffers'):
     frame = catalog.loc[catalog.outcome_type == outcome].copy()
-    if group.endswith(' series'):
-        frame = frame.loc[frame.series == group.split()[0]]
-    elif group == 'UCITS':
-        frame = frame.loc[frame.group == 'UCITS']
-    elif group == 'Quarterly structures':
-        frame = frame.loc[frame.outcome_type == 'Quarterly']
-    elif group != 'Custom universe':
-        raise ValueError('Unknown universe group')
+    frame = frame.loc[groups_mask(frame, group)]
     for column, values in [('series',series),('strategy',strategies),('reference_asset',references),('outcome_month',months)]:
         if values:
             frame = frame.loc[frame[column].isin(values)]

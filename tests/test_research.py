@@ -1,7 +1,8 @@
 from dataclasses import replace
 import unittest
 import numpy as np
-from test_ecr import example_data, ROOT
+import _ecr_db  # noqa: F401 (pins ECR_AS_OF before any data loads)
+from test_ecr import example_data
 from config.settings import ScoreConfig, BacktestConfig
 from backtesting.engine import prepare_data, simulate, trigger_signals
 from backtesting.research import ResearchSession, initial_experiments
@@ -38,7 +39,7 @@ class ResearchTests(unittest.TestCase):
         self.assertFalse(result['decisions']['Triggered'].iloc[0])
 
     def test_cache_reuses_scores_for_trigger_changes(self):
-        session = ResearchSession(ROOT/'input_data/website_metrics.csv', ROOT/'input_data/benchmark_ts.csv',ROOT/'input_data/roll_dates.csv')
+        session = ResearchSession.from_source()
         config = BacktestConfig(cohorts=('FEB',), candidate_audit=False)
         a = session.run(backtest=config)
         b = session.run(backtest=replace(config,trigger='buffer_drop'))

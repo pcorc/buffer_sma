@@ -2,6 +2,8 @@
 from pathlib import Path
 import unittest
 
+import _ecr_db  # noqa: F401 (pins ECR_AS_OF before any data loads)
+
 try:
     import nbformat
     from nbclient import NotebookClient

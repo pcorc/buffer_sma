@@ -2,8 +2,10 @@
 
 This records the earlier exploratory experiments. The active conservative notebook now keeps ECR selection fixed and varies only buffer-integrity floors; see `ucit-conservative.md`.
 
-These are exploratory historical comparisons using the supplied Website Metrics
-observations through 2026-03-27. All twelve cohort windows, monthly reviews,
+These are exploratory historical comparisons using the methodology workbook's Website
+Metrics export through 2026-03-27. That export has been retired: the backtest now reads
+the ecr database, whose cap/buffer history differs, so the figures below are a historical
+record and will not reproduce exactly. All twelve cohort windows, monthly reviews,
 threshold <= 1.5, zero minimum hold, and other model parameters are held constant.
 The buffer trigger is a 20% relative decline in Buffer Integrity from entry.
 
@@ -33,10 +35,10 @@ and -0.75 percentage points. This changes timing and costs together; it does not
 isolate a cost effect. The twelve overlapping cohorts are not independent trials.
 These are not annual alpha estimates or untouched out-of-sample results.
 
-Reproduce both tables by running `notebooks/ecr_backtest.ipynb` top to bottom.
+The tables were produced by running `notebooks/ecr_backtest.ipynb` top to bottom.
 The session builds only four distinct scored panels for the sixteen runs and
 reuses them across triggers and execution settings. Inputs are loaded once;
-recreate the session after changing source files. No parallel workers are needed
+recreate the session after changing the database tables. No parallel workers are needed
 for these small experiments.
 
 Implemented views: linked NAV/drawdown/buffer charts with entry/switch markers,
@@ -46,5 +48,5 @@ heatmap, gated component-contribution chart, and threshold/exponent sensitivity
 surfaces evaluated on a separately reserved period.
 
 Validation: 27 tests passed; the notebook executed fully under its registered
-Python kernel. The standard configuration still reproduces all 166 workbook
-events. Missing benchmark sessions remain explicitly missing in daily output.
+Python kernel. The standard configuration then reproduced all 166 workbook
+events (on the retired export). Missing benchmark sessions remain explicitly missing in daily output.

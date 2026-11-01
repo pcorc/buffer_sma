@@ -1,4 +1,4 @@
-"""Matched stress windows for exported NAVs; evaluation does not reset holdings."""
+"""Matched stress windows for a conservative batch's NAVs; evaluation does not reset holdings."""
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -55,46 +55,60 @@ def nav_metrics(nav):
             'Sharpe':returns.mean()/vol*np.sqrt(252) if vol > 0 else np.nan}
 
 
-def load_export(path, review='monthly'):
-    """Reconcile all exported summaries, then retain the simple NAV columns."""
+BATCH_FILES = ('configurations.csv', 'cohort_comparison.csv', 'comparison.csv')
+
+
+def batch_files(folder):
+    """The CSV tables a conservative batch writes beside its report workbook (which is never read)."""
+    folder = Path(folder)
+    missing = [name for name in BATCH_FILES if not (folder / name).is_file()]
+    if missing:
+        raise ValueError(f'{folder} is not a conservative batch folder; missing {", ".join(missing)}.')
+    navs = sorted(folder.glob('nav_*.csv'))
+    if not navs:
+        raise ValueError('Batch folder contains no NAV launch files (nav_<Launch>.csv); rerun the suite to write them.')
+    return [folder / name for name in BATCH_FILES] + navs
+
+
+def load_export(folder, review='monthly'):
+    """Reconcile all of a batch's summaries, then retain the simple NAV columns."""
+    folder = Path(folder)
+    navs = batch_files(folder)[len(BATCH_FILES):]
     curves, audits = {}, []
-    with pd.ExcelFile(path) as book:
-        configs = pd.read_excel(book,sheet_name='Configurations')
-        selected = simple_configurations(configs,review)
-        summary = pd.read_excel(book,sheet_name='Launch Cohorts')
-        comparison = pd.read_excel(book,sheet_name='Comparison')
-        sheets = [s for s in book.sheet_names if s.startswith('NAV ')]
-        if not sheets:
-            raise ValueError('Workbook contains no NAV launch sheets.')
-        if summary.duplicated(['Experiment','Cohort']).any():
-            raise ValueError('Duplicate experiment/cohort summary rows.')
-        for sheet in sheets:
-            cohort = sheet[4:]
-            frame = pd.read_excel(book,sheet_name=sheet,index_col=0)
-            frame.index = pd.to_datetime(frame.index,errors='raise')
-            if frame.index.hasnans or not frame.index.is_unique or not frame.index.is_monotonic_increasing:
-                raise ValueError(f'{sheet}: NAV dates must be nonmissing, unique and sorted.')
-            reported = summary.loc[summary.Cohort.eq(cohort)].set_index('Experiment')
-            if set(frame) != set(configs.Experiment) or set(frame) != set(reported.index):
-                raise ValueError(f'{sheet}: configurations, summary rows and NAV columns must match.')
-            for name in frame:
-                metrics = nav_metrics(frame[name])
-                row = reported.loc[name]
-                if pd.Timestamp(row.Start)!=frame.index[0] or pd.Timestamp(row.End)!=frame.index[-1]:
-                    raise ValueError(f'{sheet}/{name}: reported dates do not match NAV dates.')
-                error = {}
-                for key,computed in metrics.items():
-                    cached = row[key]
-                    if pd.isna(cached) and pd.isna(computed):
-                        error[key+' Error'] = 0.
-                    elif not np.isclose(cached,computed,atol=1e-9,rtol=1e-9):
-                        raise ValueError(f'{sheet}/{name}: {key} does not reconcile to the NAV history.')
-                    else:
-                        error[key+' Error'] = abs(cached-computed)
-                audits.append({'Experiment':name,'Cohort':cohort,'Start':frame.index[0],'End':frame.index[-1],**error})
-            curves[cohort] = frame.loc[:,selected.Experiment]
-        if set(summary.Cohort) != set(curves):
-            raise ValueError('Some launch summaries have no corresponding NAV sheet.')
+    configs = pd.read_csv(folder / 'configurations.csv')
+    selected = simple_configurations(configs,review)
+    summary = pd.read_csv(folder / 'cohort_comparison.csv')
+    comparison = pd.read_csv(folder / 'comparison.csv')
+    if summary.duplicated(['Experiment','Cohort']).any():
+        raise ValueError('Duplicate experiment/cohort summary rows.')
+    for nav in navs:
+        cohort = nav.stem[4:]
+        label = nav.name
+        frame = pd.read_csv(nav,index_col=0)
+        frame.index = pd.to_datetime(frame.index,errors='raise')
+        if frame.index.hasnans or not frame.index.is_unique or not frame.index.is_monotonic_increasing:
+            raise ValueError(f'{label}: NAV dates must be nonmissing, unique and sorted.')
+        reported = summary.loc[summary.Cohort.eq(cohort)].set_index('Experiment')
+        if set(frame) != set(configs.Experiment) or set(frame) != set(reported.index):
+            raise ValueError(f'{label}: configurations, summary rows and NAV columns must match.')
+        for name in frame:
+            metrics = nav_metrics(frame[name])
+            row = reported.loc[name]
+            if pd.Timestamp(row.Start)!=frame.index[0] or pd.Timestamp(row.End)!=frame.index[-1]:
+                raise ValueError(f'{label}/{name}: reported dates do not match NAV dates.')
+            error = {}
+            for key,computed in metrics.items():
+                cached = row[key]
+                if pd.isna(cached) and pd.isna(computed):
+                    error[key+' Error'] = 0.
+                elif not np.isclose(cached,computed,atol=1e-9,rtol=1e-9):
+                    raise ValueError(f'{label}/{name}: {key} does not reconcile to the NAV history.')
+                else:
+                    error[key+' Error'] = abs(cached-computed)
+            audits.append({'Experiment':name,'Cohort':cohort,'Start':frame.index[0],'End':frame.index[-1],**error})
+        curves[cohort] = frame.loc[:,selected.Experiment]
+    if set(summary.Cohort) != set(curves):
+        raise ValueError('Some launch summaries have no corresponding NAV file.')
     return selected, curves, pd.DataFrame(audits), comparison
 
 
@@ -115,7 +129,7 @@ def evaluate_windows(curves, regimes=REGIMES):
                 rows.append({'Regime':regime.name,'Kind':regime.kind,'Experiment':name,'Cohort':cohort,
                              'Start':start,'End':end,'Observations':len(window),**nav_metrics(window[name])})
     if not rows:
-        raise ValueError('No complete regime windows are covered by the workbook.')
+        raise ValueError('No complete regime windows are covered by the batch.')
     details = pd.DataFrame(rows)
     summary = details.groupby(['Regime','Kind','Experiment'],sort=False).agg(
         **{'Launch Tests':('Cohort','size'),'Mean Return':('Total Return','mean'),
@@ -124,13 +138,13 @@ def evaluate_windows(curves, regimes=REGIMES):
     return details,summary,pd.DataFrame(coverage)
 
 
-# Comparison-workbook columns written since the grid gained these dimensions; older workbooks lack them.
+# Batch configuration columns written since the grid gained these dimensions; older batches lack them.
 RECORDED_SETTINGS = {'Selection': ('selection', str), 'Execution Lag': ('execution_lag', int),
                      'Cost bps': ('cost_bps', float), 'Comparator': ('comparator', str)}
 
 
 def recorded_settings(config):
-    """Rebuild a workbook configuration faithfully; absent columns keep the fresh-start defaults."""
+    """Rebuild a batch configuration faithfully; absent columns keep the fresh-start defaults."""
     if config.get('Score Profile', 'Standard ECR') != 'Standard ECR':
         raise ValueError(f'{config.Experiment}: fresh starts support the standard ECR score only.')
     settings = {field: kind(config[column]) for column, (field, kind) in RECORDED_SETTINGS.items()

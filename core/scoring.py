@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 
-from config.settings import ScoreConfig
+from config.settings import ScoreConfig, outcome_score
 
 COMPONENTS = ('dbb', 'buffer_integrity', 'cap_integrity',
               'reset_proximity', 'period_position', 'ecr')
@@ -40,3 +40,11 @@ def score_funds(frame: pd.DataFrame, config: ScoreConfig = ScoreConfig()) -> pd.
     result.loc[~valid, list(COMPONENTS)] = np.nan
     result['score_valid'] = valid
     return result
+
+
+def score_outcomes(frame: pd.DataFrame, quarterly, config: ScoreConfig = ScoreConfig()) -> pd.DataFrame:
+    """score_funds with the quarterly timing curve on quarterly products' rows (a boolean mask)."""
+    quarterly = pd.Series(quarterly, index=frame.index).astype(bool)
+    parts = [score_funds(frame.loc[mask], outcome_score(config, outcome))
+             for outcome, mask in (('Annual', ~quarterly), ('Quarterly', quarterly)) if mask.any()]
+    return pd.concat(parts).reindex(frame.index) if parts else score_funds(frame, config)

@@ -1,4 +1,5 @@
-"""Golden economic fingerprints on the repository data; regenerate only for a named, intended change.
+"""Golden economic fingerprints on the ecr database (ECR_AS_OF pinned by _ecr_db); regenerate only for a named,
+intended change.
 
     python tests/golden_cases.py --write
 
@@ -16,6 +17,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import _ecr_db  # noqa: F401 (pins ECR_AS_OF before any data loads)
 from backtesting.engine import simulate
 from config.settings import BacktestConfig, MONTHS, ScoreConfig
 from studio.service import load_dataset, load_preset

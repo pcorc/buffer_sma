@@ -8,7 +8,8 @@ remain available; all new results are ignored by Git.
 
 ## Install and run
 
-Python 3.12 is the validated runtime. No service or API credentials are needed.
+Python 3.12 is the validated runtime. All data is read from the MySQL `ecr` schema: set
+`ECR_DB_URL` (see [Inputs and provenance](#inputs-and-provenance)) before running anything.
 
 ```bash
 python3 -m venv .venv
@@ -29,7 +30,7 @@ review decisions.
 python main.py --review daily --threshold 1.5 --min-holding-days 22 --cohorts FEB,SEP --no-excel --no-plots
 python main.py --sigma-down 0.09 --sigma-up 0.06 --period-center 160 --period-width 80
 python main.py --execution-lag 1 --cost-bps 5
-python main.py --metrics "/path/to/methodology.xlsx"
+ECR_AS_OF=2026-03-31 python main.py   # replay a frozen window of the database
 ```
 
 `--help` lists every model lever. JSON config accepts `score` and `backtest`
@@ -47,7 +48,7 @@ python -m streamlit run app.py
 
 Open the local URL printed by Streamlit (normally http://localhost:8501).
 In the prepared cloud workspace, use `/workspace/buffer_sma-env/bin/python`.
-The app is local; no account or API keys are required.
+The app runs locally; it needs only the database connection (`ECR_DB_URL`), no API keys.
 
 Start with **Super Buffer** or **UCITS Conservative**, then follow the numbered
 cards: portfolio → cadence → selection → trigger → test window. All core choices
@@ -110,7 +111,7 @@ held-fund prices or invalid held scores on review dates fail the run.
   does not create a switch or restart the holding clock.
 - Daily returns first accrue to the fund held coming into that close. The
   default `execution_lag=0` assumes theoretical same-close execution using that
-  close's metrics, matching the workbook events. This is **not evidence that
+  close's metrics (the workbook's timing convention). This is **not evidence that
   close-derived data can be traded at that same close in practice**.
 - `execution_lag=1` selects using today's data and executes at the next observed
   trading close, keeping the outgoing fund's return through execution. A signal
@@ -126,21 +127,50 @@ sequential to preserve trading logic.
 
 ## Inputs and provenance
 
-The default `input_data/website_metrics.csv` is the supplied workbook's raw A:T
-observations, exported as decimals. `website_metrics_provenance.json` records the
-source workbook hash and sheet. The XLSX adapter reads **only Website Metrics**.
-The original `input_data/data.csv` is also supported via an explicit column/unit
-adapter, but its rollover-day observations differ; it is not the parity source.
-Reported reference return G is used directly. No missing roll-date proxy is used.
+All input data comes from the `ecr` schema of the MySQL database; no CSV or Excel
+file is read. Set the connection once (a read-only account is enough), either as a line
+`ECR_DB_URL=mysql+pymysql://reader:password@host:3306/ecr` in a `.env` file at the
+repository root (gitignored; save it as UTF-8) or as an environment variable:
 
-Workbook data ends on 2026-03-27. The supplied benchmark CSV lacks twelve
-interior sessions in 2024. Those prices remain NaN in daily reports and are
-counted as `Missing Benchmark Sessions`; strategy sessions are retained. Endpoint
-benchmark prices are required, so cumulative benchmark comparisons use observed
-start/end prices. No interpolation or forward-fill is applied. Complete
-benchmark data is still needed for continuous daily benchmark analysis.
+```powershell
+setx ECR_DB_URL "mysql+pymysql://reader:password@host:3306/ecr"   # then open a new terminal
+```
 
-The manifest records parameters, input hashes, strategy/data IDs, timings,
+```bash
+export ECR_DB_URL="mysql+pymysql://reader:password@host:3306/ecr"
+```
+
+| Table | Used for |
+| --- | --- |
+| `ecr.website_metrics` | Daily fund metrics, decimal fractions (the workbook's A:T columns; the database values are authoritative) |
+| `ecr.benchmark_prices` | SPY and BUFR closes; NULL is a real gap |
+| `ecr.roll_dates` | Option-cycle calendar; the engine uses `cadence = 'monthly'` |
+| `ecr.fund_catalog` | Fund metadata behind the universe filters |
+
+`backtesting/ecr_source.py` reads all four tables in one transaction with explicit
+column lists. It never reads the stored score columns: Python computes every
+score. The engine input columns must be plain `DOUBLE`. A `DECIMAL` column rounds
+values such as 0.115999999999999 and changes `data_id`. `sql/ecr_schema.sql` holds
+the DDL. `ECR_AS_OF=YYYY-MM-DD` caps metrics, benchmarks and roll dates at a date;
+the test suite pins it to 2026-03-31. The Studio rereads the tables within 30 seconds
+of a change (`CHECKSUM TABLE`; `ECR_SIGNATURE_TTL`).
+
+Nothing in the repository reads `input_data/`. When loading CSVs into these tables,
+parse them with pandas' default `read_csv` and insert Python floats; MySQL `LOAD DATA`
+and the Workbench import wizard parse about 300 values to a neighbouring double. The
+connection URL may also be kept in a gitignored `.env` file at the repository root
+(`ECR_DB_URL=...`).
+
+Fund metrics currently run to 2026-10-30 and monthly roll dates to 2026-10-16.
+SPY closes run to 2026-10-30, but BUFR is not yet loaded after 2026-03-31, so a run
+whose window ends later stops on the missing benchmark endpoint; set an end date (or
+`ECR_AS_OF`) on or before 2026-03-31 until it is. The benchmark table lacks twelve
+interior sessions in 2024. Those prices remain NaN in daily reports and are counted as
+`Missing Benchmark Sessions`; strategy sessions are retained. Endpoint benchmark
+prices are required, so cumulative benchmark comparisons use observed start/end
+prices. No interpolation or forward-fill is applied.
+
+The manifest records parameters, each source table and a hash of its loaded content, strategy/data IDs, timings,
 execution assumptions, Git commit and dirty status. Every selected snapshot and
 candidate review identifies its strategy. No pivot combines distinct configurations.
 
@@ -152,17 +182,23 @@ switches**. Separate `Review Decisions` and `Candidate Audit` tables show holds,
 no-op triggers, delayed signals, ranks, eligibility, raw inputs and component
 scores. Snapshot data are persisted values, not formulas linked to later inputs.
 
-Independent fixtures contain Excel's cached component values and all 166
-Diagnostics events. Regression tests reproduce the actual date/fund sequence
-and every snapshot field, rather than merely looking up expected selections.
-To compare all 16,978 formula rows directly against the original workbook:
+`tests/fixtures/website_metrics_golden.csv` holds Excel's cached component values
+for 71 rows and checks the score formulas. `tests/fixtures/golden_hashes.json` pins
+the events, NAVs, holdings, decisions and trades of 13 configurations on the ecr
+database (`ECR_AS_OF=2026-03-31`); regenerate it only for an intended change with
+`python tests/golden_cases.py --write`. Every diagnostics snapshot is also checked
+against the loaded database inputs and scores.
+The score columns stored in `ecr.website_metrics` (`dbb_score`, `buffer_integrity`,
+`cap_integrity`, `reset_proximity`, `period_position`, `ecr_2_0`) hold exactly what the
+engine computes with the default settings (quarterly funds on the quarterly timing curve).
+Rerun the writer after loading new metrics; the checker reports any stale row:
 
 ```bash
-python scripts/validate_workbook.py "/path/to/ECR vs ECR + Par Proximity Methodology (5).xlsx"
+python scripts/store_engine_scores.py --dry-run   # then without --dry-run to write
+python scripts/validate_scores.py
 ```
 
-That optional verifier reads only Website Metrics and ECR Diagnostics.
-The ordinary test suite needs no external workbook. It also tests threshold
+The test suite needs the database (`ECR_DB_URL`) and no external workbook. It also tests threshold
 boundaries, minimum hold, calendar reviews, ties, costs, execution timing,
 missing data, no look-ahead, export round trips and configuration identity.
 
@@ -172,7 +208,7 @@ sample daily standard deviation times sqrt(252), with zero risk-free return.
 Annualized return uses elapsed calendar days; trades/year is separate from total
 switches. A one-observation run has no annualized return/Sharpe estimate.
 
-The first implementation focuses on correct AR scoring, event parity, configurable
+The first implementation focuses on correct AR scoring, workbook formula parity, configurable
 backtesting and snapshots. Parameter-grid orchestration, parallel workers,
 forward-trade attribution and expanded research charts are follow-up work.
 
@@ -258,11 +294,14 @@ research defaults (including `<=`), rather than either named client preset.
 
 For simpler monthly tests, pass `--grid config/conservative-simple.json` to the
 suite (15 configurations, no extra turnover controls). To evaluate an existing
-comparison on identical stress-period dates and optionally rerun fresh entries:
+batch on identical stress-period dates and optionally rerun fresh entries:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts/analyze_conservative_regimes.py --workbook "C:\path\to\comparison.xlsx" --fresh-starts
+.\.venv\Scripts\python.exe scripts/analyze_conservative_regimes.py --batch "C:\path\to\batch-folder" --fresh-starts
 ```
+
+The batch folder must hold `comparison.csv` and the `nav_<Launch>.csv` files the suite
+writes; `comparison.xlsx` is a report and is not read.
 
 See [regime analysis](documents/conservative-regimes.md) for the evaluation dates,
 carry-in versus fresh-entry distinction, data coverage and saved reports.
@@ -272,6 +311,13 @@ simple baseline cases (27 configurations, highest-ECR selection, monthly reviews
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/run_conservative_thresholds.py
+```
+
+The same 85-case grid on Max Buffer and D-series annual funds only
+(`config/conservative-maxbuffer-deep.json`):
+
+```powershell
+.\.venv\Scripts\python.exe scripts/run_conservative_maxbuffer_deep.py --end-date 2026-03-31
 ```
 
 This saves Excel/CSV comparisons and only three top-five chart pairs to a new
@@ -317,14 +363,14 @@ Use `--list` on the suite to preview its grid or `--filter "Buffer < 0.8" --limi
 --cohorts JAN` for a small batch. Customize `config/conservative-grid.json` to
 change universe filters, N, trigger floors, cadences and turnover profiles.
 See [conservative research](documents/conservative-research.md) for the exact
-commands, default matrix, output guide and validation workflow. Only annual
-F-series histories are currently loaded.
+commands, default matrix, output guide and validation workflow. A fund is runnable
+once it has rows in both `ecr.fund_catalog` and `ecr.website_metrics`.
 
 ## Universe filters, trading defaults and automatic archives
 
 The Studio now uses a navy/gold/cream visual style and a catalogue-driven universe
-section. F-series is the loaded default. D/G-series, UCITS and quarterly groups
-remain unavailable until real historical data and catalogue records are supplied.
+section. F-series is the default. Other groups become runnable once their funds have
+rows in both `ecr.fund_catalog` and `ecr.website_metrics`.
 You can filter series, strategy, reference asset, outcome month and one broad
 buffer category, then edit the exact ticker list. Only that list can be bought.
 Annual and quarterly groups remain separate; quarterly timing proposes 45/18.75

@@ -3,6 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
+import _ecr_db  # noqa: F401 (pins ECR_AS_OF before any data loads)
 from backtesting.engine import prepare_data, simulate
 from backtesting.scenarios import conservative_suite, quarterly_score_hypotheses
 from config.settings import BacktestConfig

@@ -7,6 +7,7 @@ import unittest
 
 import pandas as pd
 
+import _ecr_db  # noqa: F401 (pins ECR_AS_OF before any data loads)
 import main
 from backtesting.engine import simulate
 from config.settings import MONTHS

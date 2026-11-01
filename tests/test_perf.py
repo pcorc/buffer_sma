@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _ecr_db  # noqa: F401 (pins ECR_AS_OF before any data loads)
 from backtesting.engine import simulate
 from config.spec import RunSpec
 from studio.service import ROOT, get_session

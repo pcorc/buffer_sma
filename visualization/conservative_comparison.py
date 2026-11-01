@@ -78,6 +78,8 @@ def export_batch_comparison(results, cases, folders, output, *, plots="top5", ch
                 raise ValueError(f'{cohort}: scenario NAV calendars differ or contain missing values.')
             curves[cohort] = frame
             frame.to_excel(writer, sheet_name=f'NAV {cohort}')
+            # The regime analysis reads these; the workbook is a report, never an input.
+            frame.to_csv(output / f'nav_{cohort}.csv')
         from openpyxl.styles import Font, PatternFill
         for sheet in writer.book:
             sheet.freeze_panes = 'B2'
